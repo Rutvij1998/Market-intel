@@ -1,26 +1,79 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Exact color coding from user spec */
+  --background: #F8FAFC;           /* Clean off-white / light gray */
+  --foreground: #0F172A;           /* Dark slate primary text */
+  --card: #ffffff;
+  --card-foreground: #0F172A;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;     /* Muted gray secondary text */
+  --border: #E2E8F0;               /* Subtle borders */
+  --primary: #6B46C1;              /* Deep Purple primary accent */
+  --primary-foreground: #ffffff;
+  --positive: #22C55E;             /* Strong Green */
+  --neutral: #64748B;              /* Slate/Dark Gray */
+  --negative: #EF4444;             /* Bright Red */
+  --warning: #FEF3C7;              /* Soft yellow/orange for banner bg */
+  --warning-foreground: #78350F;   /* Dark text for warning */
+  --teal: #14B8A6;                 /* Teal/Cyan for sources */
+  --magenta: #EC4899;              /* Pink/Magenta for Trustpilot */
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+.dark {
+  --background: #0F172A;
+  --foreground: #F1F5F9;
+  --card: #1E2937;
+  --card-foreground: #F1F5F9;
+  --muted: #1E2937;
+  --muted-foreground: #94A3B8;
+  --border: #334155;
+  --primary: #6B46C1;
 }
 
 body {
+  font-family: var(--font-geist-sans);
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Dashboard specific polish - subtle shadows, clean cards */
+.dashboard-card {
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.05);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  background: var(--card);
+}
+.dashboard-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.08);
+}
+
+.gauge-container {
+  position: relative;
+}
+
+.kpi-value {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
+
+.source-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+/* Purple accents for headers, active states */
+.purple-accent {
+  color: var(--primary);
+}
+
+.button-primary {
+  background-color: var(--primary);
+  color: white;
+}
+.button-primary:hover {
+  background-color: #5B3AA8; /* Slightly darker purple */
 }
