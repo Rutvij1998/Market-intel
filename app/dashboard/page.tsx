@@ -84,16 +84,17 @@ function PieCalloutLabel(props: {
     fill = PURPLE,
     style = "paren",
   } = props;
-  if (!value || percent < 0.015) return null;
+  // Only label larger slices — small ones live in the chip legend (less clutter)
+  if (!value || percent < 0.06) return null;
 
   const RADIAN = Math.PI / 180;
   const sin = Math.sin(-midAngle * RADIAN);
   const cos = Math.cos(-midAngle * RADIAN);
   const plotW = Math.max(cx * 2, 1);
   const plotH = Math.max(cy * 2, 1);
-  const edge = 8;
+  const edge = 6;
   // Never place text closer to center than this (outside the ring)
-  const minOutside = outerRadius + 18;
+  const minOutside = outerRadius + 14;
 
   const label =
     style === "dot"
@@ -1738,9 +1739,9 @@ export default function MarketIntelDashboard() {
 
           {/* Mentions by business line + source — large pie, tight card/legend padding */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* BUSINESS LINE — solid pie + callouts Name (n) */}
-            <div className="mv-card px-2.5 pt-3 pb-2 sm:px-3 sm:pt-3.5 sm:pb-2.5 min-w-0 overflow-visible">
-              <div className="flex items-start justify-between gap-2 mb-0">
+            {/* BUSINESS LINE — large solid pie + chip legend */}
+            <div className="mv-card px-3 pt-3.5 pb-3 sm:px-4 sm:pt-4 sm:pb-3.5 min-w-0 overflow-visible">
+              <div className="flex items-start justify-between gap-2 mb-1">
                 <div className="min-w-0">
                   <div className="mv-section-title text-sm">Mentions by business line</div>
                   <div className="mv-section-sub">Share of total volume across each business line</div>
@@ -1764,17 +1765,17 @@ export default function MarketIntelDashboard() {
 
               {businessLineDistribution.some((b) => b.count > 0) ? (
                 <div className="mv-pie-panel" data-chart-ready="biz-line">
-                  {/* Fixed px height: ResponsiveContainer often paints 0×0 in headless PDF capture when height is % */}
-                  <div className="mv-pie-chart" style={{ width: '100%', height: 320 }}>
-                    <ResponsiveContainer width="100%" height={320} minWidth={200} minHeight={280}>
-                      <PieChart margin={{ top: 18, right: 22, bottom: 18, left: 22 }}>
+                  {/* Fixed px height for PDF capture; large outerRadius fills the plot (less blank) */}
+                  <div className="mv-pie-chart" style={{ width: '100%', height: 280 }}>
+                    <ResponsiveContainer width="100%" height={280} minWidth={200} minHeight={240}>
+                      <PieChart margin={{ top: 6, right: 6, bottom: 6, left: 6 }}>
                         <Pie
                           data={businessLineDistribution.filter((b) => b.count > 0)}
                           dataKey="count"
                           nameKey="label"
                           cx="50%"
                           cy="50%"
-                          outerRadius="58%"
+                          outerRadius="78%"
                           innerRadius={0}
                           paddingAngle={1.5}
                           stroke="#fff"
@@ -1823,18 +1824,45 @@ export default function MarketIntelDashboard() {
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
+                  <div className="mv-pie-legend" role="list">
+                    {businessLineDistribution
+                      .filter((b) => b.count > 0)
+                      .map((b) => {
+                        const total = likewizePoolForBizLine.length || 1;
+                        const pct = Math.round((b.count / total) * 100);
+                        const active = activeBusinessLine === b.line;
+                        return (
+                          <button
+                            key={b.line}
+                            type="button"
+                            role="listitem"
+                            className={`mv-pie-legend-chip${active ? ' is-active' : ''}`}
+                            onClick={() =>
+                              setActiveBusinessLine(active ? 'All' : b.line)
+                            }
+                            title={active ? 'Clear filter' : `Filter to ${b.label}`}
+                          >
+                            <span className="mv-legend-dot" style={{ background: b.fill }} />
+                            <span className="mv-legend-name">{b.label}</span>
+                            <span className="mv-legend-meta">
+                              {b.count.toLocaleString()} · {pct}%
+                            </span>
+                          </button>
+                        );
+                      })}
+                  </div>
                   <p className="text-[10px] text-center text-[var(--muted-foreground)] mt-0 mb-0 leading-tight">
-                    Click a slice to filter · click again to clear
+                    Click a slice or chip to filter · click again to clear
                   </p>
                 </div>
               ) : (
-                <div className="mv-empty h-[140px]">No business-line data in this window.</div>
+                <div className="mv-empty h-[120px]">No business-line data in this window.</div>
               )}
             </div>
 
-            {/* SOURCE — donut + callouts Name · n + bottom legend */}
-            <div className="mv-card px-2.5 pt-3 pb-2 sm:px-3 sm:pt-3.5 sm:pb-2 min-w-0 overflow-visible">
-              <div className="flex items-start justify-between gap-2 mb-0">
+            {/* SOURCE — large donut + chip legend */}
+            <div className="mv-card px-3 pt-3.5 pb-3 sm:px-4 sm:pt-4 sm:pb-3.5 min-w-0 overflow-visible">
+              <div className="flex items-start justify-between gap-2 mb-1">
                 <div className="min-w-0">
                   <div className="mv-section-title text-sm">Mentions by source</div>
                   <div className="mv-section-sub">Where the conversation is happening</div>
@@ -1851,17 +1879,17 @@ export default function MarketIntelDashboard() {
 
               {sourceDistribution.some((s) => s.count > 0) ? (
                 <div className="mv-pie-panel" data-chart-ready="source">
-                  <div className="mv-pie-chart" style={{ width: '100%', height: 320 }}>
-                    <ResponsiveContainer width="100%" height={320} minWidth={200} minHeight={280}>
-                      <PieChart margin={{ top: 18, right: 24, bottom: 12, left: 24 }}>
+                  <div className="mv-pie-chart" style={{ width: '100%', height: 280 }}>
+                    <ResponsiveContainer width="100%" height={280} minWidth={200} minHeight={240}>
+                      <PieChart margin={{ top: 6, right: 6, bottom: 6, left: 6 }}>
                         <Pie
                           data={sourceDistribution.filter((s) => s.count > 0)}
                           dataKey="count"
                           nameKey="source"
                           cx="50%"
                           cy="50%"
-                          outerRadius="56%"
-                          innerRadius="32%"
+                          outerRadius="74%"
+                          innerRadius="42%"
                           paddingAngle={2}
                           stroke="#fff"
                           strokeWidth={2}
@@ -1888,9 +1916,26 @@ export default function MarketIntelDashboard() {
                       </PieChart>
                     </ResponsiveContainer>
                   </div>
+                  <div className="mv-pie-legend" role="list">
+                    {sourceDistribution
+                      .filter((s) => s.count > 0)
+                      .map((s) => {
+                        const total = likewizeTotal || 1;
+                        const pct = Math.round((s.count / total) * 100);
+                        return (
+                          <div key={s.source} role="listitem" className="mv-pie-legend-chip">
+                            <span className="mv-legend-dot" style={{ background: s.fill }} />
+                            <span className="mv-legend-name">{s.source}</span>
+                            <span className="mv-legend-meta">
+                              {s.count.toLocaleString()} · {pct}%
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
               ) : (
-                <div className="mv-empty h-[140px]">No source data in this window.</div>
+                <div className="mv-empty h-[120px]">No source data in this window.</div>
               )}
             </div>
           </div>
@@ -2251,17 +2296,17 @@ export default function MarketIntelDashboard() {
                   </div>
                   {asurionSourceMix.some((s) => s.count > 0) ? (
                     <div className="mv-pie-panel">
-                      <div className="mv-pie-chart mv-pie-chart--competitor" style={{ width: '100%', height: 360 }}>
-                        <ResponsiveContainer width="100%" height={360} minWidth={200} minHeight={300}>
-                          <PieChart margin={{ top: 24, right: 52, bottom: 28, left: 52 }}>
+                      <div className="mv-pie-chart mv-pie-chart--competitor" style={{ width: '100%', height: 280 }}>
+                        <ResponsiveContainer width="100%" height={280} minWidth={200} minHeight={240}>
+                          <PieChart margin={{ top: 6, right: 6, bottom: 6, left: 6 }}>
                             <Pie
                               data={asurionSourceMix.filter((s) => s.count > 0)}
                               dataKey="count"
                               nameKey="source"
                               cx="50%"
                               cy="50%"
-                              outerRadius="48%"
-                              innerRadius="28%"
+                              outerRadius="72%"
+                              innerRadius="40%"
                               paddingAngle={2}
                               stroke="#fff"
                               strokeWidth={2}
@@ -2288,6 +2333,23 @@ export default function MarketIntelDashboard() {
                           </PieChart>
                         </ResponsiveContainer>
                       </div>
+                      <div className="mv-pie-legend" role="list">
+                        {asurionSourceMix
+                          .filter((s) => s.count > 0)
+                          .map((s) => {
+                            const total = asurionMentions.length || 1;
+                            const pct = Math.round((s.count / total) * 100);
+                            return (
+                              <div key={s.source} role="listitem" className="mv-pie-legend-chip">
+                                <span className="mv-legend-dot" style={{ background: s.fill }} />
+                                <span className="mv-legend-name">{s.source}</span>
+                                <span className="mv-legend-meta">
+                                  {s.count.toLocaleString()} · {pct}%
+                                </span>
+                              </div>
+                            );
+                          })}
+                      </div>
                     </div>
                   ) : (
                     <div className="mv-empty py-6">
@@ -2296,8 +2358,8 @@ export default function MarketIntelDashboard() {
                   )}
                 </div>
 
-                <div className="mv-card px-2 pt-3 pb-2 sm:px-2.5 sm:pt-3.5 sm:pb-2.5 min-w-0 overflow-visible">
-                  <div className="flex items-start justify-between gap-2 mb-0 px-1">
+                <div className="mv-card px-3 pt-3.5 pb-3 sm:px-3.5 sm:pt-4 sm:pb-3.5 min-w-0 overflow-visible">
+                  <div className="flex items-start justify-between gap-2 mb-1 px-0.5">
                     <div className="min-w-0">
                       <div className="mv-section-title text-sm">Likewize sources</div>
                       <div className="mv-section-sub">Where Likewize conversation is happening</div>
@@ -2313,17 +2375,17 @@ export default function MarketIntelDashboard() {
                   </div>
                   {likewizeCompetitorSourceMix.some((s) => s.count > 0) ? (
                     <div className="mv-pie-panel">
-                      <div className="mv-pie-chart mv-pie-chart--competitor" style={{ width: '100%', height: 360 }}>
-                        <ResponsiveContainer width="100%" height={360} minWidth={200} minHeight={300}>
-                          <PieChart margin={{ top: 24, right: 52, bottom: 28, left: 52 }}>
+                      <div className="mv-pie-chart mv-pie-chart--competitor" style={{ width: '100%', height: 280 }}>
+                        <ResponsiveContainer width="100%" height={280} minWidth={200} minHeight={240}>
+                          <PieChart margin={{ top: 6, right: 6, bottom: 6, left: 6 }}>
                             <Pie
                               data={likewizeCompetitorSourceMix.filter((s) => s.count > 0)}
                               dataKey="count"
                               nameKey="source"
                               cx="50%"
                               cy="50%"
-                              outerRadius="48%"
-                              innerRadius="28%"
+                              outerRadius="72%"
+                              innerRadius="40%"
                               paddingAngle={2}
                               stroke="#fff"
                               strokeWidth={2}
@@ -2349,6 +2411,23 @@ export default function MarketIntelDashboard() {
                             />
                           </PieChart>
                         </ResponsiveContainer>
+                      </div>
+                      <div className="mv-pie-legend" role="list">
+                        {likewizeCompetitorSourceMix
+                          .filter((s) => s.count > 0)
+                          .map((s) => {
+                            const total = likewizeMentions.length || 1;
+                            const pct = Math.round((s.count / total) * 100);
+                            return (
+                              <div key={s.source} role="listitem" className="mv-pie-legend-chip">
+                                <span className="mv-legend-dot" style={{ background: s.fill }} />
+                                <span className="mv-legend-name">{s.source}</span>
+                                <span className="mv-legend-meta">
+                                  {s.count.toLocaleString()} · {pct}%
+                                </span>
+                              </div>
+                            );
+                          })}
                       </div>
                     </div>
                   ) : (
