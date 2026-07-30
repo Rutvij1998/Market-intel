@@ -145,10 +145,10 @@ export default function SignInPage() {
           </form>
         </div>
       </main>
-      <footer className="py-5 text-center text-xs text-[var(--muted-foreground)]">
-        <span className="inline-flex items-center justify-center gap-1.5">
+      <footer className="py-6 text-center">
+        <span className="inline-flex items-center justify-center gap-2 text-sm sm:text-[0.95rem] font-medium text-[var(--foreground)] tracking-tight">
           Made by Likewize Product team
-          <span className="text-[var(--primary)]" aria-hidden>
+          <span className="text-[var(--primary)] text-base leading-none" aria-hidden>
             ♥
           </span>
         </span>
