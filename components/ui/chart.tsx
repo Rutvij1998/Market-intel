@@ -57,7 +57,8 @@ const ChartContainer = React.forwardRef<
         )}
         {...props}
       >
-        <RechartsPrimitive.ResponsiveContainer>
+        {/* Explicit 100% size helps headless capture; parent must set height (e.g. h-[260px]) */}
+        <RechartsPrimitive.ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
           {children}
         </RechartsPrimitive.ResponsiveContainer>
       </div>

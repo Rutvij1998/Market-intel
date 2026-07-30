@@ -1491,12 +1491,12 @@ export default function MarketIntelDashboard() {
             </div>
           )}
 
-          {/* KPI strip — same surface language as rest of page */}
+          {/* KPI strip — same surface language as rest of page (no enter animation: breaks PDF captures) */}
           <motion.div
             className="grid grid-cols-2 md:grid-cols-4 gap-4"
-            initial={{ opacity: 0, y: 8 }}
+            initial={false}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, ease: 'easeOut', delay: 0.04 }}
+            transition={{ duration: 0 }}
           >
             {[
               {
@@ -2031,9 +2031,9 @@ export default function MarketIntelDashboard() {
           {/* Retailer / Client Breakdown - kept as before for functionality, styled to match */}
           <motion.div 
             className="mv-card p-5 lg:p-6"
-            initial={{ opacity: 0, y: 10 }}
+            initial={false}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: "easeOut", delay: 0.1 }}
+            transition={{ duration: 0 }}
           >
             <div className="flex items-start justify-between mb-4">
               <div>
@@ -2048,39 +2048,39 @@ export default function MarketIntelDashboard() {
             {retailerStats.length === 0 ? (
               <div className="text-sm text-[var(--muted-foreground)] py-2">No retailer-specific data in the current filter. {isSupabaseConfigured ? 'Run ingestion (manual button) or loosen the date range.' : 'Supabase not configured (see red banner above).'} </div>
             ) : (
-              <ChartContainer
-                config={{
-                  positive: { label: "Positive", color: PINK },
-                  neutral: { label: "Neutral", color: '#C8FAFA' },
-                  negative: { label: "Negative", color: PURPLE },
-                }}
-                className="!aspect-auto h-[260px] w-full min-h-[260px]"
+              // Fixed pixel height + no animation — required for headless PDF screenshots
+              <div
+                className="w-full min-w-0"
+                style={{ width: '100%', height: 280 }}
+                data-chart-ready="retailer-bars"
               >
-                <BarChart
-                  data={retailerStats.map((r) => ({
-                    name: r.name.length > 14 ? `${r.name.slice(0, 13)}…` : r.name,
-                    fullName: r.name,
-                    positive: r.positive,
-                    neutral: r.neutral,
-                    negative: r.negative,
-                    total: r.mentions,
-                  }))}
-                  margin={{ top: 12, right: 12, left: 4, bottom: 8 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
-                  <YAxis tick={{ fontSize: 11 }} width={40} />
-                  <Tooltip
-                    content={<ChartTooltipContent />}
-                    labelFormatter={(_, payload) =>
-                      (payload?.[0]?.payload as { fullName?: string } | undefined)?.fullName || _
-                    }
-                  />
-                  <Bar dataKey="positive" stackId="a" fill={PINK} name="Positive" />
-                  <Bar dataKey="neutral" stackId="a" fill="#C8FAFA" name="Neutral" />
-                  <Bar dataKey="negative" stackId="a" fill={PURPLE} name="Negative" />
-                </BarChart>
-              </ChartContainer>
+                <ResponsiveContainer width="100%" height={280} minWidth={280} minHeight={240}>
+                  <BarChart
+                    data={retailerStats.map((r) => ({
+                      name: r.name.length > 14 ? `${r.name.slice(0, 13)}…` : r.name,
+                      fullName: r.name,
+                      positive: r.positive,
+                      neutral: r.neutral,
+                      negative: r.negative,
+                      total: r.mentions,
+                    }))}
+                    margin={{ top: 12, right: 12, left: 4, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
+                    <YAxis tick={{ fontSize: 11 }} width={40} />
+                    <Tooltip
+                      content={<ChartTooltipContent />}
+                      labelFormatter={(_, payload) =>
+                        (payload?.[0]?.payload as { fullName?: string } | undefined)?.fullName || _
+                      }
+                    />
+                    <Bar dataKey="positive" stackId="a" fill={PINK} name="Positive" isAnimationActive={false} animationDuration={0} />
+                    <Bar dataKey="neutral" stackId="a" fill="#C8FAFA" name="Neutral" isAnimationActive={false} animationDuration={0} />
+                    <Bar dataKey="negative" stackId="a" fill={PURPLE} name="Negative" isAnimationActive={false} animationDuration={0} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             )}
 
             <div className="mv-grid-tiles text-sm mt-6">
@@ -2134,9 +2134,9 @@ export default function MarketIntelDashboard() {
                       Positive sentiment % by pillar — Likewize vs Asurion
                     </div>
                   </div>
-                  <div className="flex-1 min-h-[360px] w-full">
+                  <div className="flex-1 min-h-[360px] w-full" style={{ minHeight: 360 }} data-chart-ready="competitor-bars">
                     {competitorMounted && asurionLikewizeRadarData.some(r => (r.Likewize + r.Asurion) > 0) ? (
-                      <ResponsiveContainer width="100%" height="100%">
+                      <ResponsiveContainer width="100%" height={360} minWidth={200} minHeight={320}>
                         <BarChart data={asurionLikewizeRadarData} barGap={8} barSize={18} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                           <XAxis
@@ -2159,10 +2159,10 @@ export default function MarketIntelDashboard() {
                           />
                           <Tooltip content={CustomComparisonTooltip} />
                           <Legend verticalAlign="bottom" height={28} wrapperStyle={{ fontSize: '11px', paddingTop: 4 }} />
-                          <Bar dataKey="Likewize" name="Likewize" fill={PURPLE} radius={[3, 3, 0, 0]} />
-                          <Bar dataKey="Asurion" name="Asurion" fill={PINK} radius={[3, 3, 0, 0]} />
-                          <Bar dataKey="Allstate" name="Allstate" fill={CYAN} radius={[3, 3, 0, 0]} />
-                          <Bar dataKey="SquareTrade" name="SquareTrade" fill="#6D28D9" radius={[3, 3, 0, 0]} />
+                          <Bar dataKey="Likewize" name="Likewize" fill={PURPLE} radius={[3, 3, 0, 0]} isAnimationActive={false} animationDuration={0} />
+                          <Bar dataKey="Asurion" name="Asurion" fill={PINK} radius={[3, 3, 0, 0]} isAnimationActive={false} animationDuration={0} />
+                          <Bar dataKey="Allstate" name="Allstate" fill={CYAN} radius={[3, 3, 0, 0]} isAnimationActive={false} animationDuration={0} />
+                          <Bar dataKey="SquareTrade" name="SquareTrade" fill="#6D28D9" radius={[3, 3, 0, 0]} isAnimationActive={false} animationDuration={0} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (

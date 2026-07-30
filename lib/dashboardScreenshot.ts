@@ -252,8 +252,8 @@ function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus): Target[] {
 }
 
 /**
- * Wait for dashboard + Recharts pies to paint.
- * ResponsiveContainer often measures 0×0 until resize; headless captures empty white pies.
+ * Wait for dashboard + ALL Recharts (pies + bars) to paint.
+ * ResponsiveContainer often measures 0×0 until resize; bar animations also leave empty axes.
  */
 async function settleDashboard(page: {
   waitForSelector: (sel: string, opts: { timeout: number }) => Promise<unknown>;
@@ -269,62 +269,81 @@ async function settleDashboard(page: {
     await page.waitForSelector('.mv-app-shell', { timeout: 20_000 });
   }
 
-  // Force layout: scroll through pie section + fire resize so ResponsiveContainer measures
-  await page.evaluate(() => {
-    const pies = document.querySelectorAll('.mv-pie-chart, .mv-pie-panel');
-    pies.forEach((el) => {
-      try {
-        el.scrollIntoView({ block: 'center', inline: 'nearest' });
-      } catch {
-        /* ignore */
-      }
-    });
-    // Multiple resize ticks — Recharts listens to window resize
-    window.dispatchEvent(new Event('resize'));
-    requestAnimationFrame(() => {
+  // Scroll every chart container into view and force remeasure
+  const nudgeCharts = async () => {
+    await page.evaluate(() => {
+      const nodes = document.querySelectorAll(
+        '.mv-pie-chart, .mv-pie-panel, .recharts-wrapper, [data-chart-ready], [data-chart]',
+      );
+      nodes.forEach((el) => {
+        try {
+          (el as HTMLElement).scrollIntoView({ block: 'center', inline: 'nearest' });
+        } catch {
+          /* ignore */
+        }
+      });
       window.dispatchEvent(new Event('resize'));
+      // Recharts uses ResizeObserver — toggling width slightly can help stubborn cases
+      document.querySelectorAll('.recharts-responsive-container').forEach((el) => {
+        const h = el as HTMLElement;
+        const prev = h.style.width;
+        h.style.width = '99.5%';
+        void h.offsetWidth;
+        h.style.width = prev || '100%';
+      });
+      requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
     });
-  });
+  };
 
-  await new Promise((r) => setTimeout(r, isServerless() ? 2500 : 2000));
-  await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+  await nudgeCharts();
+  await new Promise((r) => setTimeout(r, isServerless() ? 2800 : 2200));
+  await nudgeCharts();
+  await new Promise((r) => setTimeout(r, 1200));
 
-  // Wait until pie SVG sectors exist (path fills), if pie panels are on the page
+  // Wait for any painted chart geometry (pie sectors OR bar rectangles with real size)
   try {
     if (page.waitForFunction) {
       await page.waitForFunction(
         () => {
-          const panels = document.querySelectorAll('.mv-pie-chart');
-          if (!panels.length) return true; // no pies expected
-          // At least one painted sector/path with non-zero size
-          const sectors = document.querySelectorAll(
-            '.mv-pie-chart .recharts-sector, .mv-pie-chart .recharts-pie-sector, .mv-pie-chart path[class*="recharts"]',
+          const wrappers = document.querySelectorAll('.recharts-wrapper, .recharts-surface');
+          if (!wrappers.length) return true;
+
+          const pick = (sel: string) =>
+            Array.from(document.querySelectorAll(sel)).some((el) => {
+              const b = (el as Element).getBoundingClientRect();
+              return b.width > 2 && b.height > 2;
+            });
+
+          const hasPie = pick(
+            '.recharts-sector, .recharts-pie-sector, path.recharts-sector',
           );
-          if (sectors.length === 0) return false;
-          // Ensure SVG has real dimensions
-          const svg = document.querySelector('.mv-pie-chart svg') as SVGElement | null;
-          if (!svg) return false;
-          const box = svg.getBoundingClientRect();
-          return box.width > 40 && box.height > 40;
+          const hasBar = pick(
+            '.recharts-bar-rectangle, .recharts-rectangle:not(.recharts-tooltip-cursor)',
+          );
+          // Axes-only empty charts: wrapper exists but no geometry — keep waiting if totals imply data
+          const body = document.body.innerText || '';
+          const expectsCharts =
+            /Mentions by business line|Mentions by source|Breakdown by retailer|Comparative performance/i.test(
+              body,
+            ) && !/No real data yet|No business-line data|No source data|No retailer-specific data/i.test(body);
+
+          if (!expectsCharts) return true;
+          return hasPie || hasBar;
         },
-        { timeout: 20_000 },
-      );
-    } else {
-      await page.waitForSelector(
-        '.mv-pie-chart .recharts-sector, .mv-pie-chart path.recharts-sector',
-        { timeout: 15_000 },
+        { timeout: 25_000 },
       );
     }
   } catch {
-    console.warn('[screenshot] Pie sectors not detected in time — capturing anyway');
+    console.warn('[screenshot] Chart geometry not detected in time — capturing anyway');
   }
 
-  // Final paint settle
+  // One more resize + paint settle, then top for full-page shot
+  await nudgeCharts();
   await new Promise((r) => setTimeout(r, isServerless() ? 2000 : 1500));
   await page.evaluate(() => {
     window.scrollTo(0, 0);
   });
-  await new Promise((r) => setTimeout(r, 400));
+  await new Promise((r) => setTimeout(r, 500));
 }
 
 /** Puppeteer + @sparticuz/chromium — Vercel/Lambda. Always fullPage for PDF. */
