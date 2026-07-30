@@ -1,12 +1,12 @@
 /**
- * Capture exact full-page screenshots of the live Market Vantage dashboard URL
- * (what a signed-in user sees in the browser).
+ * Capture full-page screenshots of the live Market Vantage dashboard URL.
  *
- * Signs in via POST /api/auth/login so the session cookie always matches the
- * running server's AUTH_SECRET / CRON_SECRET (forging cookies is fragile).
+ * - Local: full Playwright Chromium
+ * - Vercel / serverless: @sparticuz/chromium + playwright-core
+ *   (bundled Playwright browsers are not available on /var/task)
  */
 
-import { chromium, type Browser, type Page } from 'playwright';
+import type { Browser, Page } from 'playwright-core';
 import { dashboardCredentials } from '@/lib/sessionAuth';
 
 /** Minimal sub shape for URL + capture (avoids circular import with alertReport). */
@@ -21,10 +21,8 @@ export interface ScreenshotSub {
 export interface ScreenshotFocus {
   client?: string;
   line?: string;
-  /** Prefer overview | competitor; default overview for client events */
   tab?: 'overview' | 'competitor';
   range?: '7d' | '30d' | '90d' | 'All';
-  /** Capture only the event-focused page (default true for alerts) */
   eventOnly?: boolean;
 }
 
@@ -45,7 +43,14 @@ function appBaseUrl(): string {
   ).replace(/\/$/, '');
 }
 
-/** Read PNG IHDR width/height without extra deps. */
+function isServerless(): boolean {
+  return !!(
+    process.env.VERCEL ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.AWS_EXECUTION_ENV
+  );
+}
+
 function pngDimensions(buf: Buffer): { width: number; height: number } {
   if (buf.length < 24 || buf.toString('ascii', 1, 4) !== 'PNG') {
     return { width: 1440, height: 900 };
@@ -56,7 +61,6 @@ function pngDimensions(buf: Buffer): { width: number; height: number } {
   };
 }
 
-/** Build /dashboard URL reflecting subscription + event focus when possible. */
 export function dashboardUrlForSubscription(
   sub: ScreenshotSub,
   tab?: 'overview' | 'competitor',
@@ -67,7 +71,6 @@ export function dashboardUrlForSubscription(
   const effectiveTab = focus?.tab || tab || 'overview';
   if (effectiveTab === 'competitor') u.searchParams.set('tab', 'competitor');
 
-  // Event client (e.g. Newegg) wins; else single subscription client
   const client =
     focus?.client ||
     (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
@@ -85,8 +88,23 @@ export function dashboardUrlForSubscription(
   return u.toString();
 }
 
-async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Promise<T> {
-  const browser = await chromium.launch({
+async function launchBrowser(): Promise<Browser> {
+  if (isServerless()) {
+    // Lightweight Chromium binary for AWS Lambda / Vercel
+    const chromium = (await import('@sparticuz/chromium')).default;
+    const { chromium: playwrightChromium } = await import('playwright-core');
+    const executablePath = await chromium.executablePath();
+    console.log('[screenshot] Launching serverless Chromium at', executablePath);
+    return playwrightChromium.launch({
+      args: chromium.args,
+      executablePath,
+      headless: true,
+    });
+  }
+
+  // Local / long-running hosts: full Playwright install
+  const { chromium } = await import('playwright');
+  return chromium.launch({
     headless: true,
     args: [
       '--no-sandbox',
@@ -96,33 +114,35 @@ async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Promise<T> 
       '--disable-gpu',
     ],
   });
+}
+
+async function withBrowser<T>(fn: (browser: Browser) => Promise<T>): Promise<T> {
+  const browser = await launchBrowser();
   try {
     return await fn(browser);
   } finally {
-    await browser.close();
+    await browser.close().catch(() => undefined);
   }
 }
 
 async function waitForDashboardReady(page: Page) {
   try {
-    await page.waitForSelector('[data-dashboard-ready="true"]', { timeout: 60_000 });
+    await page.waitForSelector('[data-dashboard-ready="true"]', { timeout: 45_000 });
   } catch {
-    await page.waitForSelector('.mv-app-shell', { timeout: 30_000 });
+    await page.waitForSelector('.mv-app-shell', { timeout: 20_000 });
   }
-  // Charts / fonts / second paint
-  await page.waitForTimeout(3500);
-  // Scroll so lazy layout measures, then back to top
+  // Charts settle (shorter on serverless to stay under function limits)
+  await page.waitForTimeout(isServerless() ? 2000 : 3500);
   await page.evaluate(async () => {
     window.scrollTo(0, document.body.scrollHeight);
-    await new Promise((r) => setTimeout(r, 400));
-    window.scrollTo(0, 0);
     await new Promise((r) => setTimeout(r, 300));
+    window.scrollTo(0, 0);
+    await new Promise((r) => setTimeout(r, 200));
   });
 }
 
 /**
  * Sign in via the real login API, then capture full-page PNG(s) of the live UI.
- * For event alerts, pass `focus` so the screenshot matches the new thread’s client/line.
  */
 export async function captureDashboardScreenshots(
   sub: ScreenshotSub,
@@ -131,17 +151,17 @@ export async function captureDashboardScreenshots(
   const base = appBaseUrl();
   const { username, password } = dashboardCredentials();
   const eventOnly = focus?.eventOnly !== false && !!focus?.client;
+  const scale = isServerless() ? 1 : 2;
 
   return withBrowser(async (browser) => {
     const context = await browser.newContext({
       viewport: { width: 1440, height: 900 },
-      deviceScaleFactor: 2, // sharper email / PDF
+      deviceScaleFactor: scale,
       reducedMotion: 'reduce',
     });
 
     const page = await context.newPage();
 
-    // Real login — cookie is issued by the same process that verifies it
     const loginRes = await page.request.post(`${base}/api/auth/login`, {
       data: { username, password },
       headers: { 'Content-Type': 'application/json' },
@@ -159,7 +179,7 @@ export async function captureDashboardScreenshots(
       console.log(`[screenshot] Opening ${url}`);
       const res = await page.goto(url, {
         waitUntil: 'domcontentloaded',
-        timeout: 90_000,
+        timeout: isServerless() ? 45_000 : 90_000,
       });
       if (res && res.status() >= 400) {
         throw new Error(`Dashboard returned HTTP ${res.status()} for ${url}`);
@@ -170,9 +190,10 @@ export async function captureDashboardScreenshots(
         );
       }
       await waitForDashboardReady(page);
+      // Viewport shot on serverless (faster/smaller); full page locally
       const buffer = Buffer.from(
         await page.screenshot({
-          fullPage: true,
+          fullPage: !isServerless(),
           type: 'png',
           animations: 'disabled',
         }),
@@ -204,11 +225,14 @@ export async function captureDashboardScreenshots(
         'market-vantage-overview.png',
         'Dashboard · Overview',
       );
-      await capture(
-        dashboardUrlForSubscription(sub, 'competitor', focus),
-        'market-vantage-competitor.png',
-        'Dashboard · Competitor Analysis',
-      );
+      // Second tab only when not serverless (time/memory)
+      if (!isServerless()) {
+        await capture(
+          dashboardUrlForSubscription(sub, 'competitor', focus),
+          'market-vantage-competitor.png',
+          'Dashboard · Competitor Analysis',
+        );
+      }
     }
 
     await context.close();
@@ -219,11 +243,7 @@ export async function captureDashboardScreenshots(
   });
 }
 
-/**
- * Embed live screenshots into a PDF at near-native resolution.
- * Each PNG becomes one or more pages (sliced vertically if taller than ~11").
- * No text dump — pure pixel capture of the live URL.
- */
+/** Embed screenshots into a multi-page PDF. */
 export async function screenshotsToPdf(shots: DashboardShot[]): Promise<Buffer> {
   const PDFDocument = (await import('pdfkit')).default;
 
@@ -242,7 +262,6 @@ export async function screenshotsToPdf(shots: DashboardShot[]): Promise<Buffer> 
     }
 
     for (const shot of shots) {
-      // PDF points at 72dpi. Fit to landscape letter width; slice tall captures.
       const maxPageW = 792;
       const maxPageH = 1008;
       const scale = Math.min(1, maxPageW / shot.width);

@@ -342,22 +342,24 @@ export async function processAlertDigests(opts?: {
             eventOnly: false as const,
           };
 
-      let shots: Awaited<ReturnType<typeof captureDashboardScreenshots>>;
+      // Screenshots are best-effort on Vercel (Chromium may fail). Always still send the email.
+      let shots: Awaited<ReturnType<typeof captureDashboardScreenshots>> = [];
       try {
         shots = await captureDashboardScreenshots(sub, focus);
       } catch (shotErr: any) {
-        console.error('[alerts] screenshot capture failed:', shotErr);
+        console.error('[alerts] screenshot capture failed (email still sending):', shotErr);
         errors.push(
-          `${sub.email}: live screenshot failed — ${shotErr?.message || shotErr}. Email not sent.`,
+          `${sub.email}: screenshot skipped — ${shotErr?.message || shotErr}`,
         );
-        continue;
       }
 
       let pdf: Buffer | null = null;
-      try {
-        pdf = await screenshotsToPdf(shots);
-      } catch (pdfErr: any) {
-        console.error('[alerts] PDF embed failed (still sending PNGs):', pdfErr);
+      if (shots.length) {
+        try {
+          pdf = await screenshotsToPdf(shots);
+        } catch (pdfErr: any) {
+          console.error('[alerts] PDF embed failed (still sending email):', pdfErr);
+        }
       }
 
       const dashUrl = dashboardUrlForSubscription(sub, 'overview', focus);
@@ -564,8 +566,11 @@ function buildEventAlertEmail(opts: {
         ${moreNote}
 
         <p style="margin:22px 0 0;font-size:13px;line-height:1.5;color:#5c5470">
-          Attachments: ${shotCount} live dashboard screenshot${shotCount === 1 ? '' : 's'} (PNG)
-          ${hasPdf ? ' and a PDF of the same capture' : ''}.
+          ${
+            shotCount > 0
+              ? `Attachments: ${shotCount} live dashboard screenshot${shotCount === 1 ? '' : 's'} (PNG)${hasPdf ? ' and a PDF of the same capture' : ''}.`
+              : 'Open the dashboard link above for the live view (screenshot attachment was unavailable on this send).'
+          }
         </p>
         <p style="margin:10px 0 0;font-size:12px;line-height:1.5;color:#8a8299;word-break:break-all">
           Direct link:<br/>

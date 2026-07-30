@@ -4,8 +4,8 @@ import { processAlertDigests } from '@/lib/alertReport';
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/sessionAuth';
 
 export const dynamic = 'force-dynamic';
-// Screenshots need headless Chromium — allow longer runs on hosts that support it
-export const maxDuration = 120;
+// Screenshots need headless Chromium — Vercel Pro allows higher; Hobby caps lower
+export const maxDuration = 60;
 
 async function authorized(request: Request): Promise<boolean> {
   const cronSecret = process.env.CRON_SECRET;
