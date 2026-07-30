@@ -1,14 +1,24 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Keep native/font assets resolvable at runtime (Playwright, serverless Chromium, PDFKit)
+  // Native / large server-only packages — do not bundle into the serverless graph incorrectly
   serverExternalPackages: [
+    "@sparticuz/chromium",
+    "puppeteer-core",
     "playwright",
     "playwright-core",
-    "@sparticuz/chromium",
     "pdfkit",
     "fontkit",
   ],
+  // Ensure Chromium binary assets are traced into the serverless function
+  outputFileTracingIncludes: {
+    "/api/notifications/run": [
+      "./node_modules/@sparticuz/chromium/**/*",
+    ],
+    "/api/cron/ingest": [
+      "./node_modules/@sparticuz/chromium/**/*",
+    ],
+  },
 };
 
 export default nextConfig;

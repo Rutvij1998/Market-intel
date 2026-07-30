@@ -348,9 +348,13 @@ export async function processAlertDigests(opts?: {
         shots = await captureDashboardScreenshots(sub, focus);
       } catch (shotErr: any) {
         console.error('[alerts] screenshot capture failed (email still sending):', shotErr);
-        errors.push(
-          `${sub.email}: screenshot skipped — ${shotErr?.message || shotErr}`,
-        );
+        // Short, user-facing note (full error stays in server logs)
+        const msg = String(shotErr?.message || shotErr);
+        const short =
+          msg.includes('browsers.json') || msg.includes('playwright')
+            ? 'screenshot engine unavailable on host (email still sent with dashboard link)'
+            : msg.slice(0, 160);
+        errors.push(`${sub.email}: screenshot skipped — ${short}`);
       }
 
       let pdf: Buffer | null = null;
