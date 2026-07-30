@@ -13,6 +13,9 @@ export interface AlertEnrollmentProps {
   onClose: () => void;
 }
 
+const SPAM_TIP =
+  "Check Spam/Junk if it’s not in your inbox — mark as Not spam so future alerts arrive.";
+
 export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmentProps) {
   const [email, setEmail] = useState("");
   const [allClients, setAllClients] = useState(false);
@@ -110,6 +113,8 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
         return;
       }
 
+      // Show spam tip immediately — send can take a while (screenshots)
+      toast.warning(SPAM_TIP, { duration: 14_000 });
       toast.message("Details saved — checking for new matching events…");
       const runRes = await fetch("/api/notifications/run", {
         method: "POST",
@@ -122,18 +127,17 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
         return;
       }
       const sent = runJson.emailsSent ?? 0;
-      toast.success(
-        sent > 0
-          ? `Event alert sent: ${sent} email(s) with dashboard screenshot + deep link`
-          : "Preferences saved. No new matching threads right now — you’ll be emailed when something new appears.",
-        {
-          description:
-            (runJson.errors?.length ? runJson.errors.join("; ") + " · " : "") +
-            (sent > 0
-              ? "If you don’t see it, check Spam/Junk and mark as Not spam."
-              : undefined),
-        },
-      );
+      if (sent > 0) {
+        toast.success(SPAM_TIP, {
+          description: `Email sent to ${email.trim()}. ${runJson.errors?.length ? runJson.errors.join("; ") : "Open Spam/Junk if it’s not in Inbox yet."}`,
+          duration: 14_000,
+        });
+      } else {
+        toast.success(
+          "Preferences saved. No new matching threads right now — you’ll be emailed when something new appears.",
+          { description: runJson.errors?.length ? runJson.errors.join("; ") : undefined },
+        );
+      }
       onClose();
     } catch {
       toast.error("Network error — try again");
@@ -156,7 +160,9 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
         return;
       }
 
-      toast.message("Capturing live dashboard and sending email now…");
+      // Show spam tip immediately (before the long capture/send), not only after
+      toast.warning(SPAM_TIP, { duration: 14_000 });
+      toast.message("Sending email now — check Spam/Junk if it doesn’t land in Inbox…");
       const runRes = await fetch("/api/notifications/run?force=1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -172,10 +178,13 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
       }
       const sent = runJson.emailsSent ?? 0;
       if (sent > 0) {
-        toast.success(`Email sent now to ${email.trim()} with live dashboard screenshot`, {
-          description:
-            (runJson.errors?.length ? runJson.errors.join("; ") + " · " : "") +
-            "Check Spam/Junk if it’s not in your inbox — mark as Not spam so future alerts arrive.",
+        toast.success(SPAM_TIP, {
+          description: `Email sent to ${email.trim()}. ${
+            runJson.errors?.length
+              ? runJson.errors.join("; ")
+              : "Open Spam/Junk and mark as Not spam so future alerts arrive."
+          }`,
+          duration: 14_000,
         });
         onClose();
       } else {
@@ -225,6 +234,20 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
           </button>
         </div>
 
+        {/* Always visible at top — not buried below filters */}
+        <div className="px-5 pt-3 pb-0">
+          <div className="text-xs rounded-lg border border-amber-300 bg-amber-50 text-amber-950 px-3 py-2.5 leading-relaxed flex gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-700" aria-hidden />
+            <div>
+              <div className="font-semibold text-amber-900">Check Spam / Junk first</div>
+              <p className="mt-0.5 text-amber-900/90">
+                {SPAM_TIP} Alerts come from{" "}
+                <span className="font-medium">market.vantage.noreply@gmail.com</span>.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div className="px-5 py-4 space-y-5">
           {loading ? (
             <div className="flex items-center gap-2 text-sm text-[var(--muted-foreground)] py-8 justify-center">
@@ -245,20 +268,6 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
                   <code className="font-mono">EMAIL_FROM</code> (or SMTP_*) in env so digests can send.
                 </div>
               )}
-
-              <div className="text-xs rounded-lg border border-amber-200/90 bg-amber-50 text-amber-950 px-3 py-2.5 leading-relaxed flex gap-2">
-                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-700" aria-hidden />
-                <div>
-                  <div className="font-semibold text-amber-900">Check Spam / Junk</div>
-                  <p className="mt-0.5 text-amber-900/90">
-                    Alerts are sent from <span className="font-medium">market.vantage.noreply@gmail.com</span>.
-                    Work inboxes (including Likewize) often put the first messages in{" "}
-                    <strong>Spam</strong> or quarantine. If you don’t see an email within a few minutes,
-                    open Spam, mark it as <strong>Not spam</strong>, and move it to Inbox so future alerts
-                    deliver normally.
-                  </p>
-                </div>
-              </div>
 
               <div>
                 <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)] mb-1.5">
