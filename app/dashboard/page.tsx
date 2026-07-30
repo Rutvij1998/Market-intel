@@ -40,7 +40,7 @@ import { toast } from "sonner";
 // Detect obvious misconfiguration so we can show a clear banner instead of silent empty + scary console errors
 const isSupabaseConfigured = !!supabase;
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, PieChart, Pie } from "recharts";
-import { ChartTooltipContent } from "@/components/ui/chart";
+
 
 // Brand palette from protect.likewize.com (theme main.css)
 const PURPLE = "#3200BE";
@@ -2070,10 +2070,17 @@ export default function MarketIntelDashboard() {
                     <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
                     <YAxis tick={{ fontSize: 11 }} width={40} />
                     <Tooltip
-                      content={<ChartTooltipContent />}
+                      // Do not use ChartTooltipContent here — it requires ChartContainer context and crashes in prod
+                      formatter={(value, name) => [`${value ?? 0}`, String(name)]}
                       labelFormatter={(_, payload) =>
                         (payload?.[0]?.payload as { fullName?: string } | undefined)?.fullName || _
                       }
+                      contentStyle={{
+                        borderRadius: 10,
+                        border: '1px solid #E2E8F0',
+                        fontSize: 12,
+                        boxShadow: '0 4px 12px rgba(15,23,42,0.08)',
+                      }}
                     />
                     <Bar dataKey="positive" stackId="a" fill={PINK} name="Positive" isAnimationActive={false} animationDuration={0} />
                     <Bar dataKey="neutral" stackId="a" fill="#C8FAFA" name="Neutral" isAnimationActive={false} animationDuration={0} />
