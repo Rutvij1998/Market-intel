@@ -483,6 +483,21 @@ export default function MarketIntelDashboard() {
       .finally(() => setDataReady(true));
   }, []); // run once on mount (remounts on hard refresh)
 
+  // Recharts ResponsiveContainer measures on resize — fire after data/filters settle
+  // (critical for headless PDF screenshots so pies are not blank white)
+  useEffect(() => {
+    if (!dataReady || typeof window === 'undefined') return;
+    const fire = () => window.dispatchEvent(new Event('resize'));
+    const t0 = window.setTimeout(fire, 50);
+    const t1 = window.setTimeout(fire, 300);
+    const t2 = window.setTimeout(fire, 900);
+    return () => {
+      clearTimeout(t0);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [dataReady, activeTab, activeRange, activeClient, activeBusinessLine, activeSource, mentions.length]);
+
   // When competitor tab becomes active, mount the chart containers on next tick so they have real layout size.
   useEffect(() => {
     if (activeTab === 'competitor') {
@@ -1748,9 +1763,10 @@ export default function MarketIntelDashboard() {
               </div>
 
               {businessLineDistribution.some((b) => b.count > 0) ? (
-                <div className="mv-pie-panel">
-                  <div className="mv-pie-chart">
-                    <ResponsiveContainer width="100%" height="100%">
+                <div className="mv-pie-panel" data-chart-ready="biz-line">
+                  {/* Fixed px height: ResponsiveContainer often paints 0×0 in headless PDF capture when height is % */}
+                  <div className="mv-pie-chart" style={{ width: '100%', height: 320 }}>
+                    <ResponsiveContainer width="100%" height={320} minWidth={200} minHeight={280}>
                       <PieChart margin={{ top: 18, right: 22, bottom: 18, left: 22 }}>
                         <Pie
                           data={businessLineDistribution.filter((b) => b.count > 0)}
@@ -1768,6 +1784,7 @@ export default function MarketIntelDashboard() {
                             <PieCalloutLabel {...props} style="paren" />
                           )}
                           isAnimationActive={false}
+                          animationDuration={0}
                           onClick={(_, index) => {
                             const rows = businessLineDistribution.filter((b) => b.count > 0);
                             const entry = rows[index];
@@ -1833,9 +1850,9 @@ export default function MarketIntelDashboard() {
               </div>
 
               {sourceDistribution.some((s) => s.count > 0) ? (
-                <div className="mv-pie-panel">
-                  <div className="mv-pie-chart">
-                    <ResponsiveContainer width="100%" height="100%">
+                <div className="mv-pie-panel" data-chart-ready="source">
+                  <div className="mv-pie-chart" style={{ width: '100%', height: 320 }}>
+                    <ResponsiveContainer width="100%" height={320} minWidth={200} minHeight={280}>
                       <PieChart margin={{ top: 18, right: 24, bottom: 12, left: 24 }}>
                         <Pie
                           data={sourceDistribution.filter((s) => s.count > 0)}
@@ -1851,6 +1868,7 @@ export default function MarketIntelDashboard() {
                           labelLine={false}
                           label={(props) => <PieCalloutLabel {...props} style="dot" />}
                           isAnimationActive={false}
+                          animationDuration={0}
                         >
                           {sourceDistribution
                             .filter((s) => s.count > 0)
@@ -2226,8 +2244,8 @@ export default function MarketIntelDashboard() {
                   </div>
                   {asurionSourceMix.some((s) => s.count > 0) ? (
                     <div className="mv-pie-panel">
-                      <div className="mv-pie-chart mv-pie-chart--competitor">
-                        <ResponsiveContainer width="100%" height="100%">
+                      <div className="mv-pie-chart mv-pie-chart--competitor" style={{ width: '100%', height: 360 }}>
+                        <ResponsiveContainer width="100%" height={360} minWidth={200} minHeight={300}>
                           <PieChart margin={{ top: 24, right: 52, bottom: 28, left: 52 }}>
                             <Pie
                               data={asurionSourceMix.filter((s) => s.count > 0)}
@@ -2243,6 +2261,7 @@ export default function MarketIntelDashboard() {
                               labelLine={false}
                               label={(props) => <PieCalloutLabel {...props} style="dot" />}
                               isAnimationActive={false}
+                              animationDuration={0}
                             >
                               {asurionSourceMix
                                 .filter((s) => s.count > 0)
@@ -2287,8 +2306,8 @@ export default function MarketIntelDashboard() {
                   </div>
                   {likewizeCompetitorSourceMix.some((s) => s.count > 0) ? (
                     <div className="mv-pie-panel">
-                      <div className="mv-pie-chart mv-pie-chart--competitor">
-                        <ResponsiveContainer width="100%" height="100%">
+                      <div className="mv-pie-chart mv-pie-chart--competitor" style={{ width: '100%', height: 360 }}>
+                        <ResponsiveContainer width="100%" height={360} minWidth={200} minHeight={300}>
                           <PieChart margin={{ top: 24, right: 52, bottom: 28, left: 52 }}>
                             <Pie
                               data={likewizeCompetitorSourceMix.filter((s) => s.count > 0)}
@@ -2304,6 +2323,7 @@ export default function MarketIntelDashboard() {
                               labelLine={false}
                               label={(props) => <PieCalloutLabel {...props} style="dot" />}
                               isAnimationActive={false}
+                              animationDuration={0}
                             >
                               {likewizeCompetitorSourceMix
                                 .filter((s) => s.count > 0)

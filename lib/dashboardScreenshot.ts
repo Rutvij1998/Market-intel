@@ -251,16 +251,80 @@ function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus): Target[] {
   ];
 }
 
-async function settleDashboard(
-  waitForSelector: (sel: string, opts: { timeout: number }) => Promise<unknown>,
-  waitMs: (ms: number) => Promise<void>,
-) {
+/**
+ * Wait for dashboard + Recharts pies to paint.
+ * ResponsiveContainer often measures 0×0 until resize; headless captures empty white pies.
+ */
+async function settleDashboard(page: {
+  waitForSelector: (sel: string, opts: { timeout: number }) => Promise<unknown>;
+  evaluate: (fn: () => unknown) => Promise<unknown>;
+  waitForFunction?: (
+    fn: () => boolean,
+    opts?: { timeout?: number },
+  ) => Promise<unknown>;
+}) {
   try {
-    await waitForSelector('[data-dashboard-ready="true"]', { timeout: 45_000 });
+    await page.waitForSelector('[data-dashboard-ready="true"]', { timeout: 45_000 });
   } catch {
-    await waitForSelector('.mv-app-shell', { timeout: 20_000 });
+    await page.waitForSelector('.mv-app-shell', { timeout: 20_000 });
   }
-  await waitMs(isServerless() ? 4000 : 4500);
+
+  // Force layout: scroll through pie section + fire resize so ResponsiveContainer measures
+  await page.evaluate(() => {
+    const pies = document.querySelectorAll('.mv-pie-chart, .mv-pie-panel');
+    pies.forEach((el) => {
+      try {
+        el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch {
+        /* ignore */
+      }
+    });
+    // Multiple resize ticks — Recharts listens to window resize
+    window.dispatchEvent(new Event('resize'));
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+  });
+
+  await new Promise((r) => setTimeout(r, isServerless() ? 2500 : 2000));
+  await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+
+  // Wait until pie SVG sectors exist (path fills), if pie panels are on the page
+  try {
+    if (page.waitForFunction) {
+      await page.waitForFunction(
+        () => {
+          const panels = document.querySelectorAll('.mv-pie-chart');
+          if (!panels.length) return true; // no pies expected
+          // At least one painted sector/path with non-zero size
+          const sectors = document.querySelectorAll(
+            '.mv-pie-chart .recharts-sector, .mv-pie-chart .recharts-pie-sector, .mv-pie-chart path[class*="recharts"]',
+          );
+          if (sectors.length === 0) return false;
+          // Ensure SVG has real dimensions
+          const svg = document.querySelector('.mv-pie-chart svg') as SVGElement | null;
+          if (!svg) return false;
+          const box = svg.getBoundingClientRect();
+          return box.width > 40 && box.height > 40;
+        },
+        { timeout: 20_000 },
+      );
+    } else {
+      await page.waitForSelector(
+        '.mv-pie-chart .recharts-sector, .mv-pie-chart path.recharts-sector',
+        { timeout: 15_000 },
+      );
+    }
+  } catch {
+    console.warn('[screenshot] Pie sectors not detected in time — capturing anyway');
+  }
+
+  // Final paint settle
+  await new Promise((r) => setTimeout(r, isServerless() ? 2000 : 1500));
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+  });
+  await new Promise((r) => setTimeout(r, 400));
 }
 
 /** Puppeteer + @sparticuz/chromium — Vercel/Lambda. Always fullPage for PDF. */
@@ -312,10 +376,7 @@ async function captureWithPuppeteer(
       if (page.url().includes('/sign-in')) {
         throw new Error(`Screenshot landed on sign-in (${page.url()})`);
       }
-      await settleDashboard(
-        (sel, o) => page.waitForSelector(sel, o),
-        (ms) => new Promise((r) => setTimeout(r, ms)),
-      );
+      await settleDashboard(page);
 
       if (!opts.exact) {
         const empty = await pageLooksEmpty(() => page.evaluate(() => document.body.innerText));
@@ -332,10 +393,7 @@ async function captureWithPuppeteer(
       const t = targets[targets.length - 1]!;
       console.warn(`[screenshot] Using last target ${t.url}`);
       await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 50_000 });
-      await settleDashboard(
-        (sel, o) => page.waitForSelector(sel, o),
-        (ms) => new Promise((r) => setTimeout(r, ms)),
-      );
+      await settleDashboard(page);
       chosen = t;
     }
 
@@ -384,10 +442,7 @@ async function captureWithPlaywright(
       if (page.url().includes('/sign-in')) {
         throw new Error(`Screenshot landed on sign-in (${page.url()})`);
       }
-      await settleDashboard(
-        (sel, o) => page.waitForSelector(sel, o),
-        (ms) => page.waitForTimeout(ms),
-      );
+      await settleDashboard(page);
       if (!opts.exact) {
         const empty = await pageLooksEmpty(() => page.innerText('body'));
         if (empty) {
@@ -401,10 +456,7 @@ async function captureWithPlaywright(
     if (!chosen) {
       const t = targets[targets.length - 1]!;
       await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-      await settleDashboard(
-        (sel, o) => page.waitForSelector(sel, o),
-        (ms) => page.waitForTimeout(ms),
-      );
+      await settleDashboard(page);
       chosen = t;
     }
 
