@@ -13,10 +13,10 @@ export function Header() {
 
   const handleExport = () => {
     // In Phase 3+ this will export current filtered aggregates
-    const csvContent = "data:text/csv;charset=utf-8,Market Intel Export\nHealth Score,72\nPositive,63%\n...";
+    const csvContent = "data:text/csv;charset=utf-8,Market Vantage Export\nHealth Score,72\nPositive,63%\n...";
     const link = document.createElement("a");
     link.href = encodeURI(csvContent);
-    link.download = `likewize-sentiment-${activeRange}.csv`;
+    link.download = `market-vantage-${activeRange}.csv`;
     link.click();
   };
 
@@ -27,8 +27,7 @@ export function Header() {
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-600 text-white font-bold text-lg">MI</div>
             <div>
-              <div className="font-semibold text-xl tracking-tight">Market Intel</div>
-              <div className="text-[10px] text-muted-foreground -mt-1">LIKewize vs. competitors</div>
+              <div className="font-semibold text-xl tracking-tight">Market Vantage</div>
             </div>
           </div>
 
@@ -50,7 +49,7 @@ export function Header() {
                   onClick={() => setActiveRange(range)}
                   className={`px-3 py-1 rounded-md transition font-medium ${
                     activeRange === range
-                      ? "bg-[#6B46C1] text-white shadow"
+                      ? "bg-[#3200BE] text-white shadow"
                       : "text-muted-foreground hover:text-foreground hover:bg-white/70"
                   }`}
                 >
@@ -75,10 +74,7 @@ export function Header() {
         </div>
 
         <div className="pb-4">
-          <h1 className="text-3xl font-semibold tracking-tight">Sentiment Overview</h1>
-          <p className="text-muted-foreground mt-1">
-            Live market intelligence across the Likewize ecosystem
-          </p>
+          <h1 className="text-3xl font-semibold tracking-tight">Overview</h1>
         </div>
       </div>
     </header>

@@ -18,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Market Intel | Likewize Sentiment Overview",
-  description: "Live market sentiment intelligence across the Likewize ecosystem vs. competitors.",
+  title: "Market Vantage",
+  description: "Market Vantage — sentiment and competitor intelligence for device protection.",
   icons: {
     icon: "/favicon.ico",
   },
@@ -32,7 +32,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} antialiased`} suppressHydrationWarning>
-      <body className="min-h-screen bg-[#F8FAFC] dark:bg-[#0F172A]">
+      <body className="min-h-screen bg-[var(--background)] dark:bg-[#12082A]">
         <Script id="theme-script" strategy="beforeInteractive">
           {`(function() {
             try {
@@ -45,6 +45,14 @@ export default function RootLayout({
               }
             } catch (e) {}
           })();`}
+        </Script>
+        {/* Microsoft Clarity */}
+        <Script id="microsoft-clarity" strategy="afterInteractive">
+          {`(function(c,l,a,r,i,t,y){
+            c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+            t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+            y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+          })(window, document, "clarity", "script", "xsmxje2t4c");`}
         </Script>
         {children}
         <Toaster position="top-center" richColors />

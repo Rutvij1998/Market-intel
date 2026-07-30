@@ -1,5 +1,5 @@
 import Snoowrap from 'snoowrap';
-import { isElectronicDeviceProtection, isLikewizeRelevant, detectCompany } from './utils';
+import { isElectronicDeviceProtection, isLikewizeRelevant, detectCompany, mentionsAsurion } from './utils';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -36,6 +36,9 @@ export interface RawMention {
   full_thread?: string;      // concatenated title + selftext + top comments for better sentiment context
   author?: string;
   comments?: Array<{ author: string; body: string; created_utc?: number }>;  // structured for support metrics
+  /** Set when we intentionally keep unrestricted Asurion (or other company) posts */
+  company?: 'Likewize' | 'Asurion' | 'Allstate' | 'SquareTrade' | 'Other';
+  title?: string;
 }
 
 let reddit: any = null;
@@ -47,7 +50,7 @@ async function getRedditClient() {
   const clientSecret = process.env.REDDIT_CLIENT_SECRET;
   const username = process.env.REDDIT_USERNAME;
   const password = process.env.REDDIT_PASSWORD;
-  const userAgent = process.env.REDDIT_USER_AGENT || `script:likewize-market-intel:v1.0 (by /u/${username || 'unknown'})`;
+  const userAgent = process.env.REDDIT_USER_AGENT || `script:market-vantage:v1.0 (by /u/${username || 'unknown'})`;
 
   // For script apps we need all of: clientId, clientSecret, username, password
   if (!clientId || !clientSecret || !username || !password) {
@@ -161,6 +164,17 @@ function detectClientFromSubreddit(sub: string): string | undefined {
   return undefined;
 }
 
+function haystackFromPost(post: any): string {
+  return `${post?.title || ''} ${post?.selftext || ''}`;
+}
+
+/** Keep gate: Asurion = everything; others still require device-protection or Likewize relevance. */
+function shouldKeepRedditMention(text: string): boolean {
+  if (mentionsAsurion(text)) return true;
+  if (isLikewizeRelevant({ text })) return true;
+  return isElectronicDeviceProtection(text);
+}
+
 export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMention[]> {
   const client = await getRedditClient();
   if (!client) {
@@ -170,21 +184,113 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
 
   const results: RawMention[] = [];
   try {
-    console.log(`[Reddit] Starting BROAD device protection collection (Likewize + Asurion + Allstate + SquareTrade focus). Electronic-only, strict negative keyword exclusion. Competitor data now collected symmetrically via isElectronicDeviceProtection.`);
+    console.log(`[Reddit] Starting collection: Likewize/Allstate/SquareTrade = electronic device protection; Asurion = ALL Reddit mentions (no device filter).`);
 
-    // 1. Global searches for device protection companies + terms (with Reddit exclusion operators)
-    // Focused on electronic device protection (phones, gadgets, electronics).
-    // Strong Asurion + Allstate (primary competitors) + Likewize targeting.
-    // Asurion is frequently discussed in carrier contexts (Verizon, AT&T, T-Mobile protection programs).
+    // ---------------------------------------------------------------
+    // 0. ASURION — unrestricted. Pull all Reddit posts mentioning Asurion
+    //    (home, auto, phone, claims, jobs, etc.). Competitor tab needs the full picture.
+    // ---------------------------------------------------------------
+    const asurionQueries = [
+      'asurion',
+      'title:asurion',
+      'asurion (claim OR claims OR denied OR replacement OR repair OR insurance OR warranty OR protection)',
+      'asurion (verizon OR att OR "at&t" OR tmobile OR "t-mobile" OR "best buy" OR bestbuy OR home OR auto OR phone)',
+      '"asurion_sam" OR "Asurion_Sam"',
+    ];
+
+    console.log(`[Reddit] [ASURION-ALL] Collecting unrestricted Asurion Reddit data (${asurionQueries.length} queries)...`);
+    for (const q of asurionQueries) {
+      await waitForRateLimitIfNeeded(client, 1100);
+      try {
+        console.log(`[Reddit] [ASURION-ALL] query: ${q}`);
+        let listing = await client.search({ query: q, sort: 'new', time: 'all', limit: 100 });
+        let combined: any[] = [...listing];
+        await waitForRateLimitIfNeeded(client, 700);
+        try {
+          listing = await listing.fetchMore({ amount: 100 });
+          if (listing?.length) combined = combined.concat(listing);
+        } catch {}
+        // Also pull top posts for breadth (not only newest)
+        try {
+          await waitForRateLimitIfNeeded(client, 700);
+          const topListing = await client.search({ query: q, sort: 'relevance', time: 'all', limit: 50 });
+          if (topListing?.length) combined = combined.concat(topListing);
+        } catch {}
+
+        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, 180);
+        console.log(`[Reddit] [ASURION-ALL] ${q.substring(0, 50)}... : ${uniqueCombined.length} raw posts`);
+
+        let fullCount = 0;
+        const MAX_FULL = 80;
+        for (const post of uniqueCombined) {
+          const textForCheck = haystackFromPost(post);
+          // Must actually mention Asurion (skip noise from relevance search)
+          if (!mentionsAsurion(textForCheck)) continue;
+
+          const doFull = fullCount < MAX_FULL;
+          await processSubmission(client, post, results, undefined, doFull);
+          if (doFull) {
+            fullCount++;
+            await waitForRateLimitIfNeeded(client, 450);
+          }
+        }
+      } catch (e: any) {
+        if ((e?.message || '').toLowerCase().includes('ratelimit')) {
+          console.warn('[Reddit] Rate limit on Asurion-all query');
+        } else {
+          console.log(`[Reddit] [ASURION-ALL] non-fatal: ${(e as any)?.message}`);
+        }
+      }
+    }
+
+    // Asurion in high-volume carrier / retail subs (still unrestricted content)
+    const asurionSubs = [
+      'verizon', 'tmobile', 'att', 'bestbuy', 'personalfinance',
+      'Insurance', 'legaladvice', 'iphone', 'Android', 'homeowners', 'HomeImprovement',
+    ];
+    for (const sub of asurionSubs) {
+      await waitForRateLimitIfNeeded(client, 1000);
+      try {
+        console.log(`[Reddit] [ASURION-ALL] sub r/${sub} search: asurion`);
+        let listing = await client.getSubreddit(sub).search({ query: 'asurion', sort: 'new', time: 'all', limit: 75 });
+        let combined: any[] = [...listing];
+        await waitForRateLimitIfNeeded(client, 500);
+        try {
+          listing = await listing.fetchMore({ amount: 50 });
+          if (listing?.length) combined = combined.concat(listing);
+        } catch {}
+        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, 100);
+        const clientName = detectClientFromSubreddit(sub);
+        let fullCount = 0;
+        for (const post of uniqueCombined) {
+          const textForCheck = haystackFromPost(post);
+          if (!mentionsAsurion(textForCheck)) continue;
+          const doFull = fullCount < 25;
+          await processSubmission(client, post, results, clientName, doFull);
+          if (doFull) {
+            fullCount++;
+            await waitForRateLimitIfNeeded(client, 400);
+          }
+        }
+      } catch (e: any) {
+        const msg = (e?.message || '').toLowerCase();
+        if (msg.includes('ratelimit')) {
+          console.warn(`[Reddit] Rate on Asurion sub r/${sub}`);
+          break;
+        }
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // 1. Global searches — Likewize + other competitors (device-protection focused)
+    //    Asurion still included in some queries but is already covered above.
+    // ---------------------------------------------------------------
     const globalQueries = [
       'likewize (phone OR device OR "protection plan" OR warranty OR insurance) -health -auto -car -home -pet -travel',
-      'asurion (phone OR device OR gadget OR electronics) ("protection plan" OR warranty OR insurance OR "device care" OR "phone replacement" OR claim OR denied OR replacement) -health -auto -car -home -pet -travel',
-      'asurion (verizon OR att OR "at&t" OR tmobile OR "t-mobile" OR carrier) (phone OR protection OR claim OR replacement) -health -auto -car -home -pet -travel',
-      '"asurion" ("accidental damage" OR "screen protection" OR "extended warranty" OR "device replacement") (phone OR device) -health -auto -car -home -pet -travel',
       'squaretrade (phone OR device OR gadget OR electronics) ("protection plan" OR warranty OR insurance) -health -auto -car -home -pet -travel',
-      'allstate (phone OR device OR "protection plan" OR "device protection" OR asurion) (warranty OR insurance OR claim OR replacement) -health -auto -car -home -pet -travel',
-      '"protection plan" (phone OR smartphone OR gadget OR "electronics" OR tablet OR laptop) (asurion OR squaretrade OR likewize OR allstate) -health -auto -car -home -pet',
-      '("phone insurance" OR "device protection" OR "gadget warranty" OR "screen protector plan" OR "electronics warranty" OR "device replacement plan" OR "phone replacement" asurion) -health -auto -car -home -pet -travel'
+      'allstate (phone OR device OR "protection plan" OR "device protection") (warranty OR insurance OR claim OR replacement) -health -auto -car -home -pet -travel',
+      '"protection plan" (phone OR smartphone OR gadget OR "electronics" OR tablet OR laptop) (squaretrade OR likewize OR allstate) -health -auto -car -home -pet',
+      '("phone insurance" OR "device protection" OR "gadget warranty" OR "screen protector plan" OR "electronics warranty" OR "device replacement plan") (likewize OR squaretrade OR allstate) -health -auto -car -home -pet -travel',
     ];
 
     for (const q of globalQueries) {
@@ -204,11 +310,11 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
         let fullCount = 0;
         const MAX_FULL = 50;
         for (const post of uniqueCombined) {
-          const textForCheck = `${post.title || ''} ${post.selftext || ''}`;
-          if (!isElectronicDeviceProtection(textForCheck)) continue; // early skip
+          const textForCheck = haystackFromPost(post);
+          // Asurion always kept; others need device-protection relevance
+          if (!shouldKeepRedditMention(textForCheck)) continue;
 
           const hasStrong = /likewize|asurion|squaretrade|protection plan|phone insurance/i.test(textForCheck);
-          // Always fetch full comments for Asurion/Likewize threads to capture official replies like Asurion_Sam
           const isTargetCompany = /asurion|likewize/i.test(textForCheck);
           const doFull = !!( (hasStrong || isTargetCompany) && fullCount < MAX_FULL );
           await processSubmission(client, post, results, undefined, doFull);
@@ -219,14 +325,12 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
       }
     }
 
-    // 2. Search prioritized client/retailer subs for device protection terms (Likewize + competitors)
+    // 2. Search prioritized client/retailer subs for device protection + Asurion
     const subsToSearch = SEARCH_SUBS.slice(0, MAX_SUB_SEARCHES);
-    console.log(`[Reddit] Searching ${subsToSearch.length} client/retailer subs (Rogers, Newegg, carriers like Verizon/ATT) for device protection + competitors (Asurion/Allstate will surface in carrier discussions)...`);
+    console.log(`[Reddit] Searching ${subsToSearch.length} client/retailer subs for Likewize/device protection + Asurion...`);
 
-    // Optimized sub searches: use Reddit's OR syntax to avoid dozens of separate expensive search() calls per sub (previously ~14 queries × 15 subs = hundreds of calls, causing extremely long run times and "Failed to fetch" on the manual update button).
-    // 1-2 broader searches per sub now capture Likewize + Asurion/Allstate mentions (Asurion often discussed with carriers like Verizon/ATT that are in the sub list).
-    const broadSubQuery = '(likewize OR asurion OR "protection plan" OR "phone insurance" OR "device protection" OR allstate) (phone OR device OR claim OR replacement OR warranty)';
-    const protectionSubQuery = '"protection plan" OR "phone insurance" OR "device protection" OR "accidental damage" (phone OR device)';
+    const broadSubQuery = '(likewize OR asurion OR "protection plan" OR "phone insurance" OR "device protection" OR allstate) (phone OR device OR claim OR replacement OR warranty OR insurance OR home OR auto)';
+    const protectionSubQuery = '"protection plan" OR "phone insurance" OR "device protection" OR "accidental damage" OR asurion';
 
     for (const sub of subsToSearch) {
       await waitForRateLimitIfNeeded(client, 1000);
@@ -247,15 +351,13 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
           const MAX_FULL_PER = 30;
 
           for (const post of uniqueCombined) {
-            const textForCheck = `${(post as any).title || ''} ${(post as any).selftext || ''}`;
-            if (!isElectronicDeviceProtection(textForCheck)) continue;
+            const textForCheck = haystackFromPost(post);
+            if (!shouldKeepRedditMention(textForCheck)) continue;
 
-            const titleLower = ((post as any).title || '').toLowerCase();
             const textLower = textForCheck.toLowerCase();
-            const hasKeyword = /likewize|asurion|squaretrade|allstate|protection plan|phone insurance|device protection/i.test(titleLower + ' ' + textLower);
+            const hasKeyword = /likewize|asurion|squaretrade|allstate|protection plan|phone insurance|device protection/i.test(textLower);
             const hasPlanLang = /protection|warranty|insurance|claim|replacement/i.test(textLower);
             const isTargetCompany = /asurion|likewize/i.test(textLower);
-            // Prioritize full thread for Asurion/Likewize to capture official support accounts like Asurion_Sam
             const doFull = !!((hasKeyword || (clientName && hasPlanLang) || isTargetCompany) && fullCount < MAX_FULL_PER);
 
             await processSubmission(client, post, results, clientName, doFull);
@@ -271,17 +373,29 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
     }
 
     const unique = Array.from(new Map(results.map(m => [m.id, m])).values());
-    // Strict electronic device protection filter (excludes health/auto/home/pet/travel etc.)
-    const deviceOnly = unique.filter(m => isElectronicDeviceProtection(`${(m as any).text || ''} ${(m as any).title || ''}`));
-    console.log(`[Reddit] Complete. Device-protection only (electronic): ${deviceOnly.length} / ${unique.length} (filtered non-relevant).`);
+    // Keep: all Asurion + electronic device protection / Likewize for everyone else
+    const kept = unique.filter((m) => {
+      const hay = `${(m as any).text || ''} ${(m as any).title || ''} ${(m as any).full_thread || ''}`;
+      return shouldKeepRedditMention(hay);
+    });
+
+    const asurionCount = kept.filter((m) =>
+      mentionsAsurion(`${(m as any).text || ''} ${(m as any).title || ''} ${(m as any).full_thread || ''}`),
+    ).length;
+    console.log(`[Reddit] Complete. Kept ${kept.length} / ${unique.length} (Asurion unrestricted: ${asurionCount}; others = device protection / Likewize).`);
     console.log(`[Reddit] Final rate limit: remaining=${client.ratelimitRemaining}, reset=${client.ratelimitReset}s`);
 
-    if (deviceOnly.length === 0) console.log('[Reddit] 0 relevant device protection results.');
-    return deviceOnly.slice(0, limit);
+    if (kept.length === 0) console.log('[Reddit] 0 relevant results.');
+    // Prefer not to hard-slice away Asurion volume — raise effective cap when Asurion-heavy
+    const effectiveLimit = Math.max(limit, Math.min(kept.length, Math.max(limit, asurionCount + Math.floor(limit * 0.5))));
+    return kept.slice(0, effectiveLimit);
   } catch (err) {
     console.error('Reddit fetch error (partial):', err);
-    const partial = Array.from(new Map(results.map(m => [m.id, m])).values()).filter(m => isElectronicDeviceProtection((m as any).text || ''));
-    return partial.slice(0, limit);
+    const partial = Array.from(new Map(results.map(m => [m.id, m])).values()).filter((m) => {
+      const hay = `${(m as any).text || ''} ${(m as any).title || ''}`;
+      return shouldKeepRedditMention(hay);
+    });
+    return partial.slice(0, Math.max(limit, partial.length));
   }
 }
 
@@ -305,11 +419,15 @@ function toCommentArray(comments: any): any[] {
 
 async function resolveCommentAuthor(comment: any): Promise<string> {
   try {
+    // Fast path — snoowrap usually has author.name after expandReplies without extra fetch
+    if (typeof comment.author === 'string' && comment.author) return comment.author;
+    if (comment.author?.name) return comment.author.name;
     const fetched = comment.fetch ? await comment.fetch() : comment;
-    const auth = fetched.author?.fetch ? await fetched.author : fetched.author;
-    return auth?.name || 'unknown';
+    if (typeof fetched.author === 'string') return fetched.author;
+    if (fetched.author?.name) return fetched.author.name;
+    return 'unknown';
   } catch {
-    return comment.author?.name || 'unknown';
+    return comment.author?.name || (typeof comment.author === 'string' ? comment.author : 'unknown');
   }
 }
 
@@ -349,8 +467,10 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
     await submission.fetch();
 
     let fullText = `${submission.title}\n${submission.selftext || ''}`;
-    const isTargetCompany = /asurion|likewize/i.test(fullText);
-    const shouldExpand = doFullThread || isTargetCompany;
+    const isAsurionPost = mentionsAsurion(fullText);
+    const isTargetCompany = isAsurionPost || /likewize/i.test(fullText);
+    // Always expand Asurion threads so Asurion_Sam replies are captured when present
+    const shouldExpand = doFullThread || isTargetCompany || isAsurionPost;
 
     const client = clientFromSub || detectClientFromText(fullText + ' ' + (submission.subreddit?.display_name || ''));
 
@@ -383,11 +503,13 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
     }
 
     const hayForFilter = `${candidate.text || ''} ${(candidate as any).title || ''} ${candidate.full_thread || ''}`;
-    // Keep if it is a real electronic device protection mention (supports Likewize + Asurion + Allstate + SquareTrade)
-    if (isElectronicDeviceProtection(hayForFilter) || isLikewizeRelevant(candidate)) {
+    // Asurion: keep everything. Others: device protection or Likewize only.
+    if (shouldKeepRedditMention(hayForFilter)) {
+      if (mentionsAsurion(hayForFilter)) {
+        candidate.company = 'Asurion';
+      }
       results.push(candidate as any);
     }
-    // (Non-matching device protection posts from our broad queries are dropped here — logged at ingest level)
 
   } catch (e) {
     // Fallback to basic post data
@@ -404,7 +526,10 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
       comments: [],
     };
     const hayForFilter = `${candidate.text || ''} ${(candidate as any).title || ''}`;
-    if (isElectronicDeviceProtection(hayForFilter) || isLikewizeRelevant(candidate)) {
+    if (shouldKeepRedditMention(hayForFilter)) {
+      if (mentionsAsurion(hayForFilter)) {
+        candidate.company = 'Asurion';
+      }
       results.push(candidate as any);
     }
   }
@@ -418,6 +543,158 @@ function detectClientFromText(text: string): string | undefined {
   if (lower.includes('apple') || lower.includes('iphone')) return 'Apple';
   if (lower.includes('dell') || lower.includes('hp') || lower.includes('asus') || lower.includes('lenovo')) return 'PC Manufacturer';
   return undefined;
+}
+
+/**
+ * Pull Asurion_Sam's own Reddit comment history and index by parent post id.
+ * This is the reliable way to attribute official replies — we don't depend on
+ * having expanded every Asurion thread's comment tree during scrape.
+ *
+ * Returns Map keyed by `reddit-<submissionId>` → list of Sam comments on that post.
+ */
+export async function fetchAsurionSamReplyIndex(maxComments = 900): Promise<
+  Map<string, Array<{ author: string; body: string; created_utc?: number }>>
+> {
+  const index = new Map<string, Array<{ author: string; body: string; created_utc?: number }>>();
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit][Asurion_Sam] No Reddit client — cannot fetch Sam comment history');
+    return index;
+  }
+
+  try {
+    console.log(`[Reddit][Asurion_Sam] Fetching comment history for u/Asurion_Sam (up to ${maxComments})...`);
+    await waitForRateLimitIfNeeded(client, 1000);
+    const user = client.getUser('Asurion_Sam');
+
+    // Collect pages via after/cursor style until cap
+    const byId = new Map<string, any>();
+    let listing: any = await user.getComments({ limit: 100 });
+    for (const c of listing || []) {
+      if (c?.id) byId.set(c.id, c);
+    }
+
+    for (let page = 0; page < 20 && byId.size < maxComments; page++) {
+      const before = byId.size;
+      await waitForRateLimitIfNeeded(client, 900);
+      try {
+        listing = await listing.fetchMore({ amount: 100, skipReplies: true, append: true });
+        for (const c of listing || []) {
+          if (c?.id) byId.set(c.id, c);
+        }
+      } catch (e: any) {
+        console.log(`[Reddit][Asurion_Sam] fetchMore stopped: ${(e?.message || '').slice(0, 80)}`);
+        break;
+      }
+      if (byId.size <= before) break; // no new comments
+      console.log(`[Reddit][Asurion_Sam] page ${page + 1}: ${byId.size} comments so far`);
+    }
+
+    // Also try search as a second source (finds more historical hits sometimes)
+    try {
+      await waitForRateLimitIfNeeded(client, 1000);
+      const searchHits = await client.search({
+        query: 'author:Asurion_Sam',
+        sort: 'new',
+        time: 'all',
+        limit: 100,
+      });
+      // search returns posts, not comments — skip; use comment listing only
+      void searchHits;
+    } catch {
+      // ignore
+    }
+
+    const comments = Array.from(byId.values()).slice(0, maxComments);
+    console.log(`[Reddit][Asurion_Sam] Got ${comments.length} unique comments from u/Asurion_Sam`);
+
+    for (const c of comments) {
+      try {
+        // link_id is like t3_abc123 (the submission)
+        const linkId = String(c.link_id || c.linkId || c.link_url || '')
+          .replace(/^t3_/, '')
+          .replace(/.*\/comments\/([a-z0-9]+).*/i, '$1');
+        // Prefer link_id
+        let postId = String(c.link_id || '').replace(/^t3_/, '');
+        if (!postId && c.link_url) {
+          const m = String(c.link_url).match(/\/comments\/([a-z0-9]+)/i);
+          if (m) postId = m[1];
+        }
+        if (!postId) continue;
+        const key = `reddit-${postId}`;
+        const author =
+          (typeof c.author === 'string' ? c.author : c.author?.name) || 'Asurion_Sam';
+        const entry = {
+          author,
+          body: String(c.body || '').slice(0, 1500),
+          created_utc: typeof c.created_utc === 'number' ? c.created_utc : undefined,
+        };
+        if (!index.has(key)) index.set(key, []);
+        index.get(key)!.push(entry);
+      } catch {
+        // skip bad comment
+      }
+    }
+
+    console.log(`[Reddit][Asurion_Sam] Indexed official replies on ${index.size} unique threads`);
+  } catch (e: any) {
+    console.error('[Reddit][Asurion_Sam] Failed to fetch comment history:', e?.message || e);
+  }
+
+  return index;
+}
+
+/**
+ * Ensure every post that Asurion_Sam replied to exists as an Asurion mention in results
+ * (so official-support metrics include those threads even if our scrape missed them).
+ */
+export async function hydrateAsurionSamParentThreads(
+  samIndex: Map<string, Array<{ author: string; body: string; created_utc?: number }>>,
+  existingIds: Set<string>,
+  maxNew = 80,
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client || !samIndex.size) return [];
+
+  const out: RawMention[] = [];
+  const missing = Array.from(samIndex.keys()).filter((id) => !existingIds.has(id)).slice(0, maxNew);
+  console.log(`[Reddit][Asurion_Sam] Hydrating ${missing.length} parent threads Sam replied to (not already in scrape)...`);
+
+  for (const redditId of missing) {
+    const postId = redditId.replace(/^reddit-/, '');
+    try {
+      await waitForRateLimitIfNeeded(client, 1000);
+      const submission = await client.getSubmission(postId).fetch();
+      const title = submission.title || '';
+      const selftext = submission.selftext || '';
+      const fullText = `${title}\n${selftext}`;
+      const samComments = samIndex.get(redditId) || [];
+      const commentLines = samComments.map((c) => `u/${c.author}: ${c.body}`);
+      const full_thread =
+        fullText + (commentLines.length ? `\n\nComments:\n${commentLines.join('\n---\n')}` : '');
+
+      out.push({
+        id: redditId,
+        text: fullText.slice(0, 1800),
+        source: 'Reddit',
+        url: `https://reddit.com${submission.permalink}`,
+        created_at: new Date(submission.created_utc * 1000).toISOString(),
+        subreddit: submission.subreddit?.display_name,
+        client: detectClientFromSubreddit(submission.subreddit?.display_name || '') ||
+          detectClientFromText(fullText),
+        full_thread,
+        author: submission.author?.name,
+        comments: samComments,
+        company: 'Asurion',
+        title,
+      });
+    } catch (e: any) {
+      console.log(`[Reddit][Asurion_Sam] skip ${redditId}: ${(e?.message || '').slice(0, 60)}`);
+    }
+  }
+
+  console.log(`[Reddit][Asurion_Sam] Hydrated ${out.length} parent threads into Asurion corpus`);
+  return out;
 }
 
 /** Re-fetch comment tree for an existing Reddit post (used to backfill Asurion_Sam detection). */

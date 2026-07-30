@@ -50,20 +50,18 @@ export function KpiCards({ data }: { data: KpiData }) {
       {cards.map((card, index) => {
         const Icon = card.icon;
         return (
-          <Card key={index} className="dashboard-card">
+          <Card key={index} className="mv-kpi border-0 shadow-none">
             <CardContent className="p-5">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="text-sm text-muted-foreground">{card.label}</div>
-                  <div className="mt-2 text-4xl font-semibold tracking-tighter kpi-value">
-                    {card.value}
-                  </div>
+                  <div className="mv-kpi-label">{card.label}</div>
+                  <div className="mv-kpi-value text-3xl">{card.value}</div>
                 </div>
-                <div className="rounded-lg bg-[#6B46C1]/10 p-2">
-                  <Icon className="h-5 w-5" style={{ color: "#6B46C1" }} />
+                <div className="rounded-lg bg-[var(--lw-primary-soft)] p-2">
+                  <Icon className="h-5 w-5" style={{ color: "var(--lw-primary)" }} />
                 </div>
               </div>
-              <div className={`mt-3 text-sm font-medium ${card.changePositive ? "text-emerald-600" : "text-rose-600"}`}>
+              <div className={`mt-3 text-sm font-medium ${card.changePositive ? "text-[var(--lw-cyan)]" : "text-[var(--lw-primary)]"}`}>
                 {card.change}
               </div>
             </CardContent>

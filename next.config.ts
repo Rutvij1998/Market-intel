@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Keep native/font assets resolvable at runtime (Playwright, PDFKit AFM fonts)
+  serverExternalPackages: ["playwright", "playwright-core", "pdfkit", "fontkit"],
 };
 
 export default nextConfig;

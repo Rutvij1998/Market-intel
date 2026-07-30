@@ -61,7 +61,7 @@ export function HealthGauge({ score }: HealthGaugeProps) {
           <path
             d="M 45 140 A 105 105 0 0 1 255 140"
             fill="none"
-            stroke="#F1E7FF"
+            stroke="#EDE5FF"
             strokeWidth="30"
             strokeLinecap="round"
           />
@@ -71,8 +71,8 @@ export function HealthGauge({ score }: HealthGaugeProps) {
         <svg width="300" height="170" className="absolute">
           <defs>
             <linearGradient id="gaugeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor={normalized < 40 ? "#EF4444" : "#6B46C1"} />
-              <stop offset="100%" stopColor={normalized < 40 ? "#EF4444" : "#6B46C1"} />
+              <stop offset="0%" stopColor={normalized < 40 ? "#E11D48" : "#3200BE"} />
+              <stop offset="100%" stopColor={normalized < 40 ? "#E11D48" : "#FF96FF"} />
             </linearGradient>
           </defs>
           <path
@@ -91,12 +91,12 @@ export function HealthGauge({ score }: HealthGaugeProps) {
         <div className="absolute left-1/2 top-[70px] -translate-x-1/2 flex flex-col items-center">
           <div 
             className="text-[82px] font-extrabold leading-none tracking-[-3.5px] tabular-nums transition-all duration-300"
-            style={{ color: "#1E1B4B" }}
+            style={{ color: "var(--foreground)" }}
           >
             {displayScore}
           </div>
-          <div className="text-[11px] tracking-wider uppercase text-[#6B7280] mt-0.5">
-            HEALTH SCORE
+          <div className="text-[11px] tracking-wider uppercase text-[var(--muted-foreground)] mt-0.5">
+            Health score
           </div>
         </div>
       </div>

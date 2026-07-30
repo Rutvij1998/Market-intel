@@ -42,17 +42,17 @@ export function PillarBars({ pillars }: PillarBarsProps) {
             >
               <div
                 className="h-full transition-all"
-                style={{ width: `${posWidth}%`, backgroundColor: "#22C55E" }}
+                style={{ width: `${posWidth}%`, backgroundColor: "#FF96FF" }}
                 title={`Positive: ${p.positive}%`}
               />
               <div
                 className="h-full transition-all"
-                style={{ width: `${neuWidth}%`, backgroundColor: "#64748B" }}
+                style={{ width: `${neuWidth}%`, backgroundColor: "#C8FAFA" }}
                 title={`Neutral: ${p.neutral}%`}
               />
               <div
                 className="h-full transition-all"
-                style={{ width: `${negWidth}%`, backgroundColor: "#EF4444" }}
+                style={{ width: `${negWidth}%`, backgroundColor: "#3200BE" }}
                 title={`Negative: ${p.negative}%`}
               />
             </div>

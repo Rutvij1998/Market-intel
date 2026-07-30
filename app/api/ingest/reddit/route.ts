@@ -2,16 +2,19 @@ import { NextResponse } from 'next/server';
 import { fetchDeviceProtectionMentions } from '@/lib/reddit';
 import { classifyWithGrok, ClassifiedMention } from '@/lib/classify';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isElectronicDeviceProtection, detectCompany } from '@/lib/utils';
+import { isElectronicDeviceProtection, detectCompany, mentionsAsurion } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST() {
   try {
-    const rawMentions = await fetchDeviceProtectionMentions(120);
+    const rawMentions = await fetchDeviceProtectionMentions(400);
 
+    // Asurion: keep all Reddit topics. Others: electronic device protection only.
     const filtered = rawMentions.filter((raw: any) => {
-      const ok = isElectronicDeviceProtection(`${raw.text || ''} ${raw.title || ''}`);
+      const hay = `${raw.text || ''} ${raw.title || ''}`;
+      if (mentionsAsurion(hay) || raw.company === 'Asurion') return true;
+      const ok = isElectronicDeviceProtection(hay);
       if (!ok) console.log(`[Ingest/reddit] EXCLUDED non-device: ${raw.id}`);
       return ok;
     });
@@ -19,8 +22,10 @@ export async function POST() {
     const classified: ClassifiedMention[] = [];
 
     for (const raw of filtered) {
+      const hay = `${raw.text || ''} ${(raw as any).title || ''}`;
+      const isAsurion = mentionsAsurion(hay) || raw.company === 'Asurion';
       const classification = await classifyWithGrok(raw.text, (raw as any).client);
-      if (classification.is_relevant === false) continue;
+      if (!isAsurion && classification.is_relevant === false) continue;
 
       const item: ClassifiedMention = {
         id: raw.id,
@@ -33,8 +38,12 @@ export async function POST() {
         confidence: classification.confidence,
         key_issue: classification.key_issue,
         client: (raw as any).client,
-        company: (classification.company as any) || detectCompany(`${raw.text} ${(raw as any).title || ''}`),
-        product_type: 'electronic_device_protection',
+        company: isAsurion
+          ? 'Asurion'
+          : ((classification.company as any) || detectCompany(hay)),
+        product_type: isAsurion && !isElectronicDeviceProtection(hay)
+          ? 'other'
+          : 'electronic_device_protection',
         is_relevant: true,
         rating: (raw as any).rating,
       };

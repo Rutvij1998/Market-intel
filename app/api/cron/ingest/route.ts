@@ -50,7 +50,16 @@ export async function GET(request: Request) {
   try {
     // For scheduled cron, use 'update' mode for incremental collection.
     const result = await runIngestion({ mode: 'update' });
-    return NextResponse.json(result);
+    // After ingest, email PDF digests for new threads matching alert enrollments
+    let alerts: unknown = null;
+    try {
+      const { processAlertDigests } = await import('@/lib/alertReport');
+      alerts = await processAlertDigests({ sinceHours: 48 });
+    } catch (e: any) {
+      console.error('[cron] alert digests failed:', e?.message || e);
+      alerts = { ok: false, error: e?.message || 'alerts failed' };
+    }
+    return NextResponse.json({ ...result, alerts });
   } catch (error: any) {
     console.error('Cron ingest error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

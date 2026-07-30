@@ -13,7 +13,7 @@ export function SourceDonut({ sources }: { sources: Source[] }) {
 
   // Exact colors per user spec for pie
   const coloredSources = sources.map(s => {
-    if (s.name.toLowerCase().includes('reddit')) return { ...s, color: '#6B46C1' };
+    if (s.name.toLowerCase().includes('reddit')) return { ...s, color: '#3200BE' };
     if (s.name.toLowerCase().includes('trustpilot')) return { ...s, color: '#EC4899' };
     return { ...s, color: '#14B8A6' }; // Teal/Cyan for BBB/Google
   });

@@ -1,17 +1,131 @@
-import { fetchDeviceProtectionMentions, refreshRedditThreadComments } from '@/lib/reddit';
-import { scrapePissedConsumer } from '@/lib/scrapers';
+import {
+  fetchDeviceProtectionMentions,
+  refreshRedditThreadComments,
+  fetchAsurionSamReplyIndex,
+  hydrateAsurionSamParentThreads,
+} from '@/lib/reddit';
+import { scrapePissedConsumer, scrapeLikewizeBBB, scrapeAsurionBBB } from '@/lib/scrapers';
 import { classifyWithGrok, ClassifiedMention } from '@/lib/classify';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isElectronicDeviceProtection, detectCompany, normalizeMentionSource, dedupeMentions, mentionDedupKey } from '@/lib/utils';
-import { detectOfficialSupportReply } from '@/lib/officialSupport';
+import { isElectronicDeviceProtection, detectCompany, normalizeMentionSource, dedupeMentions, mentionDedupKey, mentionsAsurion } from '@/lib/utils';
+import { detectOfficialSupportReply, toRedditMentionId, ASURION_OFFICIAL_ACCOUNT } from '@/lib/officialSupport';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+type SamIndex = Map<string, Array<{ author: string; body: string; created_utc?: number }>>;
+
+/**
+ * Fast path: apply u/Asurion_Sam's comment history onto existing Asurion rows in Supabase.
+ * Covers threads even when we never expanded their full comment trees during scrape.
+ */
+async function applyAsurionSamIndexToDatabase(samIndex: SamIndex): Promise<number> {
+  if (!supabaseAdmin || !samIndex.size) return 0;
+
+  let allRows: any[] = [];
+  for (let from = 0; from < 5000; from += 1000) {
+    const { data, error } = await supabaseAdmin
+      .from('mentions')
+      .select('reddit_id, source, created_at, raw_data, content, title')
+      .like('reddit_id', 'reddit-%')
+      .order('created_at', { ascending: false })
+      .range(from, from + 999);
+    if (error || !data?.length) break;
+    allRows = allRows.concat(data);
+    if (data.length < 1000) break;
+  }
+
+  let updated = 0;
+  let matched = 0;
+
+  for (const row of allRows) {
+    const raw = row.raw_data || {};
+    const hay = `${row.content || ''} ${row.title || ''} ${raw.full_thread || ''}`;
+    const company = raw.company || raw.competitor;
+    const isAsurion =
+      company === 'Asurion' || mentionsAsurion(hay) || mentionsAsurion(JSON.stringify(raw));
+    if (!isAsurion) continue;
+
+    const key = toRedditMentionId(row.reddit_id) || row.reddit_id;
+    const samComments = samIndex.get(key) || [];
+    const existingComments = Array.isArray(raw.comments) ? raw.comments : [];
+    const originalComments = Array.isArray(raw.original?.comments) ? raw.original.comments : [];
+    const mergedComments = [...existingComments, ...originalComments, ...samComments];
+
+    // Dedupe comments by author+body+created_utc
+    const seen = new Set<string>();
+    const comments = mergedComments.filter((c: any) => {
+      const k = `${c?.author || ''}|${(c?.body || '').slice(0, 80)}|${c?.created_utc || ''}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    const support = detectOfficialSupportReply({
+      company: 'Asurion',
+      comments,
+      full_thread: raw.full_thread,
+      created_at: row.created_at,
+      knownOfficialComments: samComments,
+    });
+
+    if (samComments.length) matched++;
+
+    const alreadyCorrect =
+      support.has_official_reply === !!raw.has_official_reply &&
+      support.official_replier === (raw.official_replier ?? null) &&
+      comments.length === existingComments.length &&
+      company === 'Asurion';
+
+    if (alreadyCorrect && !samComments.length) continue;
+
+    // Always persist Sam hits; also re-tag company for Asurion rows
+    if (!support.has_official_reply && !samComments.length && company === 'Asurion') continue;
+
+    const { error: updateErr } = await supabaseAdmin
+      .from('mentions')
+      .update({
+        raw_data: {
+          ...raw,
+          company: 'Asurion',
+          competitor: 'Asurion',
+          comments,
+          has_official_reply: support.has_official_reply,
+          first_official_reply_hours: support.first_official_reply_hours,
+          official_replier: support.official_replier,
+          asurion_sam_indexed: samComments.length > 0,
+        },
+      })
+      .eq('reddit_id', row.reddit_id);
+
+    if (!updateErr) {
+      updated++;
+      if (support.has_official_reply) {
+        console.log(`[Ingest] Asurion_Sam reply on ${row.reddit_id} (${support.first_official_reply_hours ?? '?'}h)`);
+      }
+    }
+  }
+
+  console.log(
+    `[Ingest] Asurion_Sam index applied: ${matched} threads matched Sam history, ${updated} DB rows updated (index size ${samIndex.size}).`,
+  );
+  return updated;
+}
 
 async function backfillRedditOfficialSupport() {
   if (!supabaseAdmin) return 0;
 
+  // 1) Primary: Asurion_Sam user comment history (fast, comprehensive)
+  let samUpdated = 0;
+  try {
+    const samIndex = await fetchAsurionSamReplyIndex(1000);
+    samUpdated = await applyAsurionSamIndexToDatabase(samIndex);
+  } catch (e: any) {
+    console.error('[Ingest] Asurion_Sam index apply failed:', e?.message || e);
+  }
+
+  // 2) Secondary: expand a batch of Asurion threads still missing comments (rate-limited)
   let allRows: any[] = [];
-  for (let from = 0; from < 2000; from += 1000) {
+  for (let from = 0; from < 3000; from += 1000) {
     const { data, error } = await supabaseAdmin
       .from('mentions')
       .select('reddit_id, source, created_at, raw_data')
@@ -23,24 +137,22 @@ async function backfillRedditOfficialSupport() {
     if (data.length < 1000) break;
   }
 
-  if (!allRows.length) return 0;
+  if (!allRows.length) return samUpdated;
 
   const candidates = allRows
     .map((row) => {
       const raw = row.raw_data || {};
       const company = raw.company || raw.competitor;
-      // Only Asurion has a known official account (Asurion_Sam). Skip Likewize backfill.
       if (company !== 'Asurion') return null;
+      if (raw.has_official_reply) return null; // already known
       const existingComments = raw.comments || raw.original?.comments || [];
       if (existingComments.length) return null;
       return { row, raw, company, priority: 0 };
     })
     .filter(Boolean) as Array<{ row: any; raw: any; company: string; priority: number }>;
 
-  candidates.sort((a, b) => a.priority - b.priority);
-
   let refreshed = 0;
-  const maxRefresh = 90;
+  const maxRefresh = 40; // Sam index covers most; only sample remaining
   for (const { row, raw, company } of candidates) {
     if (refreshed >= maxRefresh) break;
 
@@ -76,13 +188,15 @@ async function backfillRedditOfficialSupport() {
       }
     }
 
-    await delay(1200);
+    await delay(1100);
   }
 
-  if (refreshed > 0) {
-    console.log(`[Ingest] Backfilled Reddit comments for ${refreshed} thread(s) (official support scan).`);
+  if (refreshed > 0 || samUpdated > 0) {
+    console.log(
+      `[Ingest] Official support backfill: Sam-index updates=${samUpdated}, thread refreshes=${refreshed}.`,
+    );
   }
-  return refreshed;
+  return samUpdated + refreshed;
 }
 
 export async function repairMislabeledSources(opts: { skipBackfill?: boolean } = {}) {
@@ -216,20 +330,64 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
 
   await repairMislabeledSources();
 
-  // Sources: Reddit + PissedConsumer only.
-  const fetchLimit = isFull ? 400 : 220;
-  console.log(`[Ingest] Starting ingestion (${isFull ? 'full' : 'update'}). Sources: Reddit + PissedConsumer (all pages).`);
+  // Sources: Reddit + PissedConsumer + Likewize BBB (all ~70 review pages).
+  // Higher limit so unrestricted Asurion Reddit volume is not truncated.
+  const fetchLimit = isFull ? 700 : 450;
+  console.log(
+    `[Ingest] Starting ingestion (${isFull ? 'full' : 'update'}). Sources: Reddit + PissedConsumer + Likewize BBB + Asurion BBB.`,
+  );
 
   const redditRaw = await fetchDeviceProtectionMentions(fetchLimit);
   const pcRaw = await scrapePissedConsumer();
+  // Full BBB pagination (cloudscraper; Asurion can be large — many pages)
+  const bbbLikewizeRaw = await scrapeLikewizeBBB(80);
+  const bbbAsurionRaw = await scrapeAsurionBBB(isFull ? 1000 : 1000);
+  const bbbRaw = [...bbbLikewizeRaw, ...bbbAsurionRaw];
 
-  let allRaw = dedupeMentions([...redditRaw, ...pcRaw]);
+  // Index u/Asurion_Sam comments → merge into Asurion mentions for official-reply metrics
+  let samIndex: SamIndex = new Map();
+  try {
+    samIndex = await fetchAsurionSamReplyIndex(1000);
+  } catch (e: any) {
+    console.warn('[Ingest] Could not load Asurion_Sam history:', e?.message || e);
+  }
 
-  // Final hard filter for electronic device protection only (belt + suspenders)
+  // Pull parent posts of Sam replies that our scrape may have missed
+  let samParents: any[] = [];
+  if (samIndex.size) {
+    const existingIds = new Set(redditRaw.map((r) => r.id));
+    try {
+      samParents = await hydrateAsurionSamParentThreads(samIndex, existingIds, 100);
+    } catch (e: any) {
+      console.warn('[Ingest] Sam parent hydrate failed:', e?.message || e);
+    }
+  }
+
+  let allRaw = dedupeMentions([...redditRaw, ...samParents, ...pcRaw, ...bbbRaw]);
+
+  // Attach known Asurion_Sam comments onto matching raw mentions
+  if (samIndex.size) {
+    let attached = 0;
+    for (const raw of allRaw as any[]) {
+      const key = toRedditMentionId(raw.id);
+      if (!key) continue;
+      const samComments = samIndex.get(key);
+      if (!samComments?.length) continue;
+      const existing = Array.isArray(raw.comments) ? raw.comments : [];
+      raw.comments = [...existing, ...samComments];
+      raw.company = 'Asurion';
+      attached++;
+    }
+    console.log(`[Ingest] Attached Asurion_Sam comments to ${attached} threads (index ${samIndex.size}, parents +${samParents.length}).`);
+  }
+
+  // Filter: PissedConsumer + BBB always kept; Asurion always kept; others need device protection.
   const filteredRaw = allRaw.filter((raw: any) => {
     const source = (raw.source || '').toLowerCase();
     if (source.includes('pissedconsumer') || source.includes('pissed')) return true;
+    if (source.includes('bbb') || String(raw.id || '').startsWith('bbb-')) return true;
     const hay = `${raw.text || ''} ${raw.title || ''} ${(raw as any).full_thread || ''}`;
+    if (mentionsAsurion(hay) || raw.company === 'Asurion') return true;
     const ok = isElectronicDeviceProtection(hay);
     if (!ok) {
       console.log(`[Ingest] EXCLUDED non-device-protection: ${raw.source || 'unknown'} ${raw.id} (company hint: ${detectCompany(hay)})`);
@@ -237,15 +395,36 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
     return ok;
   });
 
-  console.log(`[Ingest] ${filteredRaw.length} / ${allRaw.length} items passed electronic device protection filter. Classifying...`);
+  console.log(
+    `[Ingest] ${filteredRaw.length} / ${allRaw.length} items kept ` +
+      `(PC + BBB + Asurion unrestricted + device protection). Classifying...`,
+  );
 
   const classified: ClassifiedMention[] = [];
   let companyCounts = { Likewize: 0, Asurion: 0, Allstate: 0, SquareTrade: 0, Other: 0 };
 
   for (const raw of filteredRaw) {
     const haystack = `${raw.text || ''} ${(raw as any).full_thread || ''} ${(raw as any).title || ''}`;
-    const preCompany = detectCompany(haystack);
+    const preCompany =
+      raw.company === 'Asurion' || mentionsAsurion(haystack)
+        ? 'Asurion'
+        : detectCompany(haystack);
     const isPissedConsumer = (raw.source || '').toLowerCase().includes('pissed');
+    const isBBB =
+      (raw.source || '').toLowerCase().includes('bbb') || String(raw.id || '').startsWith('bbb-');
+    // Asurion BBB ids look like bbb-0573_2131781_* ; Likewize bbb-0825_1000202069_*
+    const isAsurionBBB =
+      isBBB &&
+      (raw.company === 'Asurion' ||
+        String(raw.id || '').includes('2131781') ||
+        String(raw.id || '').includes('0573_2131781'));
+    const isLikewizeBBB = isBBB && !isAsurionBBB;
+    const isAsurionAll =
+      preCompany === 'Asurion' ||
+      mentionsAsurion(haystack) ||
+      isAsurionBBB ||
+      raw.company === 'Asurion';
+    const isDevice = isElectronicDeviceProtection(haystack);
 
     let classification;
     try {
@@ -254,11 +433,11 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
       console.error(`[Ingest] Classification failed for ${raw.id}, rule fallback:`, classErr?.message || classErr);
       classification = { 
         sentiment: 'neutral', pillar: 'Other', confidence: 0.4, key_issue: 'Classification error',
-        company: preCompany, product_type: 'electronic_device_protection', is_relevant: true 
+        company: preCompany, product_type: isDevice ? 'electronic_device_protection' : 'other', is_relevant: true 
       };
     }
 
-    if (isPissedConsumer) {
+    if (isPissedConsumer || isLikewizeBBB) {
       classification = {
         ...classification,
         company: 'Likewize',
@@ -267,19 +446,47 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
       };
     }
 
-    // Final relevance gate from classification (PissedConsumer reviews are always kept)
-    if (!isPissedConsumer && (classification.is_relevant === false || classification.product_type === 'other')) {
+    // Asurion Reddit + Asurion BBB — competitor analysis only (never Overview)
+    if (isAsurionAll) {
+      classification = {
+        ...classification,
+        company: 'Asurion',
+        is_relevant: true,
+        product_type: isDevice || isAsurionBBB ? 'electronic_device_protection' : (classification.product_type || 'other'),
+      };
+    }
+
+    // Final relevance gate (PissedConsumer + BBB + Asurion always kept)
+    if (
+      !isPissedConsumer &&
+      !isBBB &&
+      !isAsurionAll &&
+      (classification.is_relevant === false || classification.product_type === 'other')
+    ) {
       console.log(`[Ingest] Skipping after classify (non-device): ${raw.id}`);
       continue;
     }
 
-    const finalCompany = isPissedConsumer ? 'Likewize' : ((classification.company as any) || preCompany || 'Other');
+    const finalCompany = isPissedConsumer || isLikewizeBBB
+      ? 'Likewize'
+      : isAsurionAll
+        ? 'Asurion'
+        : ((classification.company as any) || preCompany || 'Other');
     if (finalCompany in companyCounts) {
       (companyCounts as any)[finalCompany]++;
     } else {
       companyCounts.Other++;
     }
 
+    const productType =
+      finalCompany === 'Asurion'
+        ? (isDevice ? 'electronic_device_protection' : 'other')
+        : 'electronic_device_protection';
+
+    const samCommentsForPost =
+      finalCompany === 'Asurion'
+        ? samIndex.get(toRedditMentionId(raw.id) || raw.id) || []
+        : [];
     const support =
       finalCompany === 'Asurion' || finalCompany === 'Likewize'
         ? detectOfficialSupportReply({
@@ -287,6 +494,7 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
             comments: (raw as any).comments || [],
             full_thread: (raw as any).full_thread,
             created_at: raw.created_at,
+            knownOfficialComments: samCommentsForPost,
           })
         : { has_official_reply: false, first_official_reply_hours: null, official_replier: null };
     const { has_official_reply, first_official_reply_hours, official_replier } = support;
@@ -308,7 +516,7 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
       subreddit: (raw as any).subreddit,
       full_thread: (raw as any).full_thread,
       company: finalCompany,
-      product_type: 'electronic_device_protection',
+      product_type: productType as any,
       is_relevant: true,
       has_official_reply,
       first_official_reply_hours,
@@ -347,7 +555,8 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
         has_official_reply,
         first_official_reply_hours,
         official_replier,
-        product_type: 'electronic_device_protection',
+        product_type: productType,
+        asurion_unrestricted: finalCompany === 'Asurion',
         original: raw,
       }
     };
@@ -364,17 +573,24 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
   const sources = {
     reddit: redditRaw.length,
     pissedconsumer: pcRaw.length,
+    bbb: bbbRaw.length,
+    bbb_likewize: bbbLikewizeRaw.length,
+    bbb_asurion: bbbAsurionRaw.length,
   };
 
-  console.log(`[Ingest] Company breakdown (after classification + filters): Likewize=${companyCounts.Likewize}, Asurion=${companyCounts.Asurion}, Allstate=${companyCounts.Allstate}, SquareTrade=${companyCounts.SquareTrade}, Other=${companyCounts.Other}. Total kept: ${classified.length} (Reddit + PissedConsumer).`);
+  console.log(
+    `[Ingest] Company breakdown: Likewize=${companyCounts.Likewize}, Asurion=${companyCounts.Asurion}, ` +
+      `Allstate=${companyCounts.Allstate}, SquareTrade=${companyCounts.SquareTrade}, Other=${companyCounts.Other}. ` +
+      `Total kept: ${classified.length} (Reddit + PC + BBB=${bbbRaw.length}).`,
+  );
 
   return {
     success: true,
     count: classified.length,
     mentions: classified,
     sources,
-    message: supabaseAdmin 
-      ? `Ingested and saved ${classified.length} mentions from Reddit + PissedConsumer.`
+    message: supabaseAdmin
+      ? `Ingested and saved ${classified.length} mentions from Reddit + PissedConsumer + BBB.`
       : 'Ingested (no Supabase).',
   };
 }
