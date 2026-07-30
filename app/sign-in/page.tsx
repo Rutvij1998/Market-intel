@@ -145,6 +145,14 @@ export default function SignInPage() {
           </form>
         </div>
       </main>
+      <footer className="py-5 text-center text-xs text-[var(--muted-foreground)]">
+        <span className="inline-flex items-center justify-center gap-1.5">
+          Made by Likewize Product team
+          <span className="text-[var(--primary)]" aria-hidden>
+            ♥
+          </span>
+        </span>
+      </footer>
     </div>
   );
 }

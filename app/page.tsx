@@ -186,8 +186,16 @@ export default function HomePage() {
         </div>
       </section>
 
-      <footer className="border-t border-[var(--border)] py-6 text-center text-xs text-[var(--muted-foreground)]">
-        Market Vantage · Internal use for Likewize · {new Date().getFullYear()}
+      <footer className="border-t border-[var(--border)] py-6 text-center text-xs text-[var(--muted-foreground)] space-y-1.5">
+        <div>
+          Market Vantage · Internal use for Likewize · {new Date().getFullYear()}
+        </div>
+        <div className="inline-flex items-center justify-center gap-1.5">
+          Made by Likewize Product team
+          <span className="text-[var(--primary)]" aria-hidden>
+            ♥
+          </span>
+        </div>
       </footer>
     </div>
   );
