@@ -6,17 +6,33 @@ import { Button } from "@/components/ui/button";
 import { BUSINESS_LINE_LABELS, type BusinessLine, BusinessLines } from "@/lib/utils";
 import { toast } from "sonner";
 
+/** Exact filters open on the dashboard when the user opens Alerts / Send. */
+export interface DashboardViewSnapshotProp {
+  tab: 'overview' | 'competitor';
+  range: '7d' | '30d' | '90d' | 'All';
+  client: string;
+  source: string;
+  businessLine: string;
+}
+
 export interface AlertEnrollmentProps {
   /** Client names available in current date window (sorted) */
   clientOptions: string[];
   open: boolean;
   onClose: () => void;
+  /** Live dashboard view to capture when sending now */
+  viewSnapshot?: DashboardViewSnapshotProp;
 }
 
 const SPAM_TIP =
   "Check Spam/Junk if it’s not in your inbox — mark as Not spam so future alerts arrive.";
 
-export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmentProps) {
+export function AlertEnrollment({
+  clientOptions,
+  open,
+  onClose,
+  viewSnapshot,
+}: AlertEnrollmentProps) {
   const [email, setEmail] = useState("");
   const [allClients, setAllClients] = useState(false);
   const [clients, setClients] = useState<string[]>([]);
@@ -162,13 +178,22 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
 
       // Show spam tip immediately (before the long capture/send), not only after
       toast.warning(SPAM_TIP, { duration: 14_000 });
-      toast.message("Sending email now — check Spam/Junk if it doesn’t land in Inbox…");
+      const snapDesc = viewSnapshot
+        ? `${viewSnapshot.tab} · ${viewSnapshot.range}${
+            viewSnapshot.client !== "All" ? ` · ${viewSnapshot.client}` : ""
+          }${viewSnapshot.businessLine !== "All" ? ` · ${viewSnapshot.businessLine}` : ""}`
+        : "current dashboard";
+      toast.message(
+        `Capturing full-page PDF of what you have open (${snapDesc}) and sending…`,
+      );
       const runRes = await fetch("/api/notifications/run?force=1", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           force: true,
           email: email.trim().toLowerCase(),
+          // Exact filters open on screen — server recreates this URL for capture
+          viewSnapshot: viewSnapshot || undefined,
         }),
       });
       const runJson = await runRes.json().catch(() => ({}));
@@ -179,10 +204,10 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
       const sent = runJson.emailsSent ?? 0;
       if (sent > 0) {
         toast.success(SPAM_TIP, {
-          description: `Email sent to ${email.trim()}. ${
+          description: `Full-page PDF + snapshot emailed to ${email.trim()} (${snapDesc}). ${
             runJson.errors?.length
               ? runJson.errors.join("; ")
-              : "Open Spam/Junk and mark as Not spam so future alerts arrive."
+              : "Open Spam/Junk if not in Inbox."
           }`,
           duration: 14_000,
         });
@@ -219,9 +244,9 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
               <h2 className="text-base font-semibold tracking-tight">Email alerts</h2>
             </div>
             <p className="text-xs text-[var(--muted-foreground)] mt-1 leading-relaxed">
-              Choose your email and filters. Automatic alerts fire on <strong>new</strong> matching
-              threads (e.g. Newegg, Rogers). You can also <strong>Send email now</strong> for an
-              immediate screenshot report anytime.
+              Automatic alerts fire on <strong>new</strong> matching threads.
+              <strong> Send email now</strong> captures a <strong>full-page PDF</strong> of the
+              dashboard <em>exactly as you have it open</em> (tab, dates, client, line) and emails it.
             </p>
           </div>
           <button
@@ -383,6 +408,21 @@ export function AlertEnrollment({ clientOptions, open, onClose }: AlertEnrollmen
                 new activity. Use <strong>Send email now</strong> anytime for an immediate report with
                 a live dashboard screenshot.
               </p>
+
+              {viewSnapshot && (
+                <div className="text-[11px] rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-[var(--muted-foreground)] leading-relaxed">
+                  <span className="font-semibold text-[var(--foreground)]">Snapshot to send: </span>
+                  {viewSnapshot.tab === "competitor" ? "Competitor" : "Overview"}
+                  {" · "}
+                  {viewSnapshot.range}
+                  {viewSnapshot.client !== "All" ? ` · Client: ${viewSnapshot.client}` : " · All clients"}
+                  {viewSnapshot.businessLine !== "All"
+                    ? ` · Line: ${BUSINESS_LINE_LABELS[viewSnapshot.businessLine as BusinessLine] || viewSnapshot.businessLine}`
+                    : " · All lines"}
+                  {viewSnapshot.source !== "All" ? ` · Source: ${viewSnapshot.source}` : ""}
+                  . Full page → PDF + PNG.
+                </div>
+              )}
 
               <div className="flex flex-col sm:flex-row flex-wrap gap-2 pt-1">
                 <Button

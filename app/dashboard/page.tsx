@@ -437,7 +437,8 @@ export default function MarketIntelDashboard() {
     }
   }
 
-  // Deep-link filters for alert screenshots / shared URLs: ?client=&line=&source=&tab=&range=&screenshot=
+  // Deep-link filters for alert screenshots / shared URLs:
+  // ?client=&line=&source=&tab=&range=&screenshot=1&exact=1
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -447,26 +448,26 @@ export default function MarketIntelDashboard() {
     const tab = params.get('tab');
     const range = params.get('range');
     const screenshotMode = params.get('screenshot') === '1';
+    // exact=1 → honor filters as sent (user snapshot); otherwise auto-alert defaults
+    const exactMode = params.get('exact') === '1';
 
     if (client) setActiveClient(client);
-    // In screenshot mode, skip line filter unless explicitly provided AND not empty-prone —
-    // email captures already omit line; still honor explicit ?line= when present.
-    if (
-      line &&
-      ['DP', 'HomeTech', 'TradeIn', 'Shipping', 'CallCenter', 'Other'].includes(line) &&
-      !screenshotMode
-    ) {
-      setActiveBusinessLine(line as BusinessLine);
-    } else if (line && screenshotMode && ['DP', 'HomeTech', 'TradeIn', 'Shipping', 'CallCenter', 'Other'].includes(line)) {
-      // Only apply line in screenshot if URL has it (optional); prefer All lines for full board
-      // Leave business line at All for richer screenshots
-      setActiveBusinessLine('All');
-    }
     if (source) setActiveSource(source);
     if (tab === 'competitor' || tab === 'overview') setActiveTab(tab);
 
-    // Screenshot emails must not land on empty 7d windows when data is older
-    if (screenshotMode) {
+    if (line && ['DP', 'HomeTech', 'TradeIn', 'Shipping', 'CallCenter', 'Other'].includes(line)) {
+      // Exact snapshot: apply line. Auto screenshot without exact: keep All lines for more data
+      if (exactMode || !screenshotMode) {
+        setActiveBusinessLine(line as BusinessLine);
+      } else {
+        setActiveBusinessLine('All');
+      }
+    }
+
+    if (exactMode && (range === '7d' || range === '30d' || range === '90d' || range === 'All')) {
+      setActiveRange(range);
+    } else if (screenshotMode) {
+      // Auto alerts: prefer All so empty 7d windows are avoided
       setActiveRange(range === '30d' || range === '90d' || range === 'All' ? range : 'All');
     } else if (range === '7d' || range === '30d' || range === '90d' || range === 'All') {
       setActiveRange(range);
@@ -2621,6 +2622,13 @@ export default function MarketIntelDashboard() {
         open={alertEnrollOpen}
         onClose={() => setAlertEnrollOpen(false)}
         clientOptions={clientOptions.map((c) => c.name)}
+        viewSnapshot={{
+          tab: activeTab,
+          range: activeRange,
+          client: activeClient,
+          source: activeSource,
+          businessLine: activeBusinessLine,
+        }}
       />
 
       {/* Theme drill-down — click a pain / love row to open matching threads */}

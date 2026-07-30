@@ -1,11 +1,13 @@
 /**
- * Capture screenshots of the live Market Vantage dashboard URL.
+ * Capture screenshots / full-page PDFs of the live Market Vantage dashboard.
  *
- * Local: Playwright (full install)
- * Vercel/serverless: puppeteer-core + @sparticuz/chromium
+ * Local: Playwright
+ * Vercel: puppeteer-core + @sparticuz/chromium
  *
- * Screenshots always use range=All by default so the image is not empty when
- * recent windows (7d) have no new threads.
+ * Modes:
+ * - Auto alerts: range=All, skip line filters, fall back if empty
+ * - Exact snapshot: recreate the filters the user had open (tab/range/client/line/source)
+ *   and capture the full page for PNG + multi-page PDF
  */
 
 import { dashboardCredentials } from '@/lib/sessionAuth';
@@ -17,14 +19,29 @@ export interface ScreenshotSub {
   business_lines: string[];
 }
 
+/** Live UI state when the user clicks “Send email now”. */
+export interface DashboardViewSnapshot {
+  tab: 'overview' | 'competitor';
+  range: '7d' | '30d' | '90d' | 'All';
+  client: string; // "All" or name
+  source: string; // "All" or source label
+  businessLine: string; // "All" or BusinessLine code
+}
+
 export interface ScreenshotFocus {
   client?: string;
   line?: string;
+  source?: string;
   tab?: 'overview' | 'competitor';
   range?: '7d' | '30d' | '90d' | 'All';
   eventOnly?: boolean;
-  /** When true (default for alerts), skip business-line filter so the shot has data */
+  /** When true (default for auto alerts), skip business-line filter */
   skipLineFilter?: boolean;
+  /**
+   * Exact user view: honor range/client/line/source/tab as given (even 7d).
+   * full-page capture for PDF.
+   */
+  exactSnapshot?: boolean;
 }
 
 export interface DashboardShot {
@@ -62,10 +79,6 @@ function pngDimensions(buf: Buffer): { width: number; height: number } {
   };
 }
 
-/**
- * Build dashboard URL for screenshots / deep links.
- * Defaults to range=All so empty 7d windows are avoided.
- */
 export function dashboardUrlForSubscription(
   sub: ScreenshotSub,
   tab?: 'overview' | 'competitor',
@@ -73,30 +86,53 @@ export function dashboardUrlForSubscription(
 ): string {
   const base = appBaseUrl();
   const u = new URL('/dashboard', base);
+  const exact = !!focus?.exactSnapshot;
   const effectiveTab = focus?.tab || tab || 'overview';
   if (effectiveTab === 'competitor') u.searchParams.set('tab', 'competitor');
 
-  const client =
-    focus?.client ||
-    (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
-  if (client) u.searchParams.set('client', client);
+  if (exact) {
+    if (focus?.client && focus.client !== 'All') u.searchParams.set('client', focus.client);
+    if (focus?.line && focus.line !== 'All') u.searchParams.set('line', focus.line);
+    if (focus?.source && focus.source !== 'All') u.searchParams.set('source', focus.source);
+    u.searchParams.set('range', focus?.range || 'All');
+    u.searchParams.set('exact', '1');
+  } else {
+    const client =
+      focus?.client ||
+      (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
+    if (client && client !== 'All') u.searchParams.set('client', client);
 
-  // Line filters often zero-out the board; only apply when explicitly requested
-  const skipLine = focus?.skipLineFilter !== false;
-  if (!skipLine) {
-    const line =
-      focus?.line ||
-      (!sub.all_business_lines && sub.business_lines?.length === 1
-        ? sub.business_lines[0]
-        : undefined);
-    if (line) u.searchParams.set('line', line);
+    const skipLine = focus?.skipLineFilter !== false;
+    if (!skipLine) {
+      const line =
+        focus?.line ||
+        (!sub.all_business_lines && sub.business_lines?.length === 1
+          ? sub.business_lines[0]
+          : undefined);
+      if (line && line !== 'All') u.searchParams.set('line', line);
+    }
+
+    // Auto alerts: avoid empty 7d when ingest is stale
+    const range = focus?.range && focus.range !== '7d' ? focus.range : 'All';
+    u.searchParams.set('range', range);
   }
 
-  // Never default to 7d for captures — stale ingest makes that empty
-  const range = focus?.range && focus.range !== '7d' ? focus.range : 'All';
-  u.searchParams.set('range', range);
   u.searchParams.set('screenshot', '1');
   return u.toString();
+}
+
+/** Build focus from the live dashboard controls the user had open. */
+export function focusFromViewSnapshot(snap: DashboardViewSnapshot): ScreenshotFocus {
+  return {
+    tab: snap.tab,
+    range: snap.range,
+    client: snap.client !== 'All' ? snap.client : undefined,
+    line: snap.businessLine !== 'All' ? snap.businessLine : undefined,
+    source: snap.source !== 'All' ? snap.source : undefined,
+    exactSnapshot: true,
+    eventOnly: false,
+    skipLineFilter: false,
+  };
 }
 
 function shotFromPng(buffer: Buffer, filename: string, label: string): DashboardShot {
@@ -144,15 +180,10 @@ async function loginCookies(base: string): Promise<{ name: string; value: string
   return out;
 }
 
-/** True if the live page looks empty (no chart data). */
 async function pageLooksEmpty(getText: () => Promise<string>): Promise<boolean> {
   const text = await getText();
   if (/No real data yet/i.test(text)) return true;
   if (/No data in current filter/i.test(text)) return true;
-  if (/No source data in this window/i.test(text) && /LIKEWIZE MENTIONS[\s\S]{0,40}\b0\b/i.test(text)) {
-    return true;
-  }
-  // KPI strip showing zeros for main count
   if (/LIKEWIZE MENTIONS\s*0\b/i.test(text) && /POSITIVE SENTIMENT\s*0%/i.test(text)) {
     return true;
   }
@@ -162,6 +193,26 @@ async function pageLooksEmpty(getText: () => Promise<string>): Promise<boolean> 
 type Target = { url: string; filename: string; label: string };
 
 function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus): Target[] {
+  // Exact snapshot of what the user had open — single URL, no fallback that changes filters
+  if (focus?.exactSnapshot) {
+    const parts = [
+      focus.tab || 'overview',
+      focus.range || 'All',
+      focus.client || 'all-clients',
+      focus.line || 'all-lines',
+    ];
+    const safe = parts.join('-').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 60);
+    return [
+      {
+        url: dashboardUrlForSubscription(sub, focus.tab || 'overview', focus),
+        filename: `market-vantage-snapshot-${safe}.png`,
+        label: `Live snapshot · ${focus.tab || 'overview'} · ${focus.range || 'All'}${
+          focus.client ? ` · ${focus.client}` : ''
+        }${focus.line ? ` · ${focus.line}` : ''}`,
+      },
+    ];
+  }
+
   const eventOnly = focus?.eventOnly !== false && !!focus?.client;
   const baseFocus: ScreenshotFocus = {
     ...focus,
@@ -179,7 +230,6 @@ function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus): Target[] {
         filename: `market-vantage-${safe}.png`,
         label: `Dashboard · ${labelClient} · All dates`,
       },
-      // Fallback: unfiltered overview if client filter is empty
       {
         url: dashboardUrlForSubscription(sub, 'overview', {
           range: 'All',
@@ -210,12 +260,14 @@ async function settleDashboard(
   } catch {
     await waitForSelector('.mv-app-shell', { timeout: 20_000 });
   }
-  // Let Recharts + filters re-render after deep-link state applies
-  await waitMs(isServerless() ? 3500 : 4500);
+  await waitMs(isServerless() ? 4000 : 4500);
 }
 
-/** Puppeteer + @sparticuz/chromium — Vercel/Lambda. */
-async function captureWithPuppeteer(targets: Target[]): Promise<DashboardShot[]> {
+/** Puppeteer + @sparticuz/chromium — Vercel/Lambda. Always fullPage for PDF. */
+async function captureWithPuppeteer(
+  targets: Target[],
+  opts: { exact: boolean },
+): Promise<DashboardShot[]> {
   const chromium = (await import('@sparticuz/chromium')).default;
   const puppeteer = (await import('puppeteer-core')).default;
   const base = appBaseUrl();
@@ -261,39 +313,46 @@ async function captureWithPuppeteer(targets: Target[]): Promise<DashboardShot[]>
         throw new Error(`Screenshot landed on sign-in (${page.url()})`);
       }
       await settleDashboard(
-        (sel, opts) => page.waitForSelector(sel, opts),
+        (sel, o) => page.waitForSelector(sel, o),
         (ms) => new Promise((r) => setTimeout(r, ms)),
       );
-      const empty = await pageLooksEmpty(() => page.evaluate(() => document.body.innerText));
-      if (empty) {
-        console.warn(`[screenshot] Empty UI for ${t.url} — trying next URL`);
-        continue;
+
+      if (!opts.exact) {
+        const empty = await pageLooksEmpty(() => page.evaluate(() => document.body.innerText));
+        if (empty) {
+          console.warn(`[screenshot] Empty UI for ${t.url} — trying next URL`);
+          continue;
+        }
       }
       chosen = t;
       break;
     }
 
-    // Last resort: capture whatever we have (prefer last target = broadest)
     if (!chosen) {
       const t = targets[targets.length - 1]!;
-      console.warn(`[screenshot] All targets looked empty; capturing fallback ${t.url}`);
+      console.warn(`[screenshot] Using last target ${t.url}`);
       await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 50_000 });
       await settleDashboard(
-        (sel, opts) => page.waitForSelector(sel, opts),
+        (sel, o) => page.waitForSelector(sel, o),
         (ms) => new Promise((r) => setTimeout(r, ms)),
       );
       chosen = t;
     }
 
-    const png = Buffer.from(await page.screenshot({ type: 'png', fullPage: false }));
+    // Full page for PDF (entire scrollable dashboard)
+    const png = Buffer.from(
+      await page.screenshot({ type: 'png', fullPage: true }),
+    );
     return [shotFromPng(png, chosen.filename.replace(/-fallback/, ''), chosen.label)];
   } finally {
     await browser.close().catch(() => undefined);
   }
 }
 
-/** Full Playwright — local/dev only. */
-async function captureWithPlaywright(targets: Target[]): Promise<DashboardShot[]> {
+async function captureWithPlaywright(
+  targets: Target[],
+  opts: { exact: boolean },
+): Promise<DashboardShot[]> {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({
     headless: true,
@@ -320,28 +379,30 @@ async function captureWithPlaywright(targets: Target[]): Promise<DashboardShot[]
     let chosen: Target | null = null;
     for (const t of targets) {
       console.log(`[screenshot] Opening ${t.url}`);
-      const res = await page.goto(t.url, { waitUntil: 'networkidle', timeout: 90_000 });
+      const res = await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
       if (res && res.status() >= 400) continue;
       if (page.url().includes('/sign-in')) {
         throw new Error(`Screenshot landed on sign-in (${page.url()})`);
       }
       await settleDashboard(
-        (sel, opts) => page.waitForSelector(sel, opts),
+        (sel, o) => page.waitForSelector(sel, o),
         (ms) => page.waitForTimeout(ms),
       );
-      const empty = await pageLooksEmpty(() => page.innerText('body'));
-      if (empty) {
-        console.warn(`[screenshot] Empty UI for ${t.url} — trying next`);
-        continue;
+      if (!opts.exact) {
+        const empty = await pageLooksEmpty(() => page.innerText('body'));
+        if (empty) {
+          console.warn(`[screenshot] Empty UI for ${t.url} — trying next`);
+          continue;
+        }
       }
       chosen = t;
       break;
     }
     if (!chosen) {
       const t = targets[targets.length - 1]!;
-      await page.goto(t.url, { waitUntil: 'networkidle', timeout: 90_000 });
+      await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
       await settleDashboard(
-        (sel, opts) => page.waitForSelector(sel, opts),
+        (sel, o) => page.waitForSelector(sel, o),
         (ms) => page.waitForTimeout(ms),
       );
       chosen = t;
@@ -357,23 +418,22 @@ async function captureWithPlaywright(targets: Target[]): Promise<DashboardShot[]
   }
 }
 
-/**
- * Capture live dashboard PNG(s). Uses puppeteer on Vercel; Playwright locally.
- * Prefers range=All and skips line filters; falls back to unfiltered overview if empty.
- */
 export async function captureDashboardScreenshots(
   sub: ScreenshotSub,
   focus?: ScreenshotFocus,
 ): Promise<DashboardShot[]> {
   const targets = buildTargets(sub, focus);
+  const exact = !!focus?.exactSnapshot;
   const shots = isServerless()
-    ? await captureWithPuppeteer(targets)
-    : await captureWithPlaywright(targets);
+    ? await captureWithPuppeteer(targets, { exact })
+    : await captureWithPlaywright(targets, { exact });
   if (!shots.length) throw new Error('No dashboard screenshots were captured');
   return shots;
 }
 
-/** Embed screenshots into a multi-page PDF. */
+/**
+ * Embed full-page screenshot(s) into a multi-page PDF (whole page, sliced vertically).
+ */
 export async function screenshotsToPdf(shots: DashboardShot[]): Promise<Buffer> {
   const PDFDocument = (await import('pdfkit')).default;
 
@@ -392,14 +452,15 @@ export async function screenshotsToPdf(shots: DashboardShot[]): Promise<Buffer> 
     }
 
     for (const shot of shots) {
-      const maxPageW = 792;
-      const maxPageH = 1008;
+      // Fit to letter width; slice tall full-page captures across multiple PDF pages
+      const maxPageW = 612; // letter width points
+      const maxPageH = 792; // letter height
       const scale = Math.min(1, maxPageW / shot.width);
       const scaledW = shot.width * scale;
       const scaledH = shot.height * scale;
 
       if (scaledH <= maxPageH) {
-        doc.addPage({ size: [scaledW, scaledH], margin: 0 });
+        doc.addPage({ size: [scaledW, Math.max(scaledH, 200)], margin: 0 });
         doc.image(shot.buffer, 0, 0, { width: scaledW, height: scaledH });
       } else {
         const pageCount = Math.ceil(scaledH / maxPageH);

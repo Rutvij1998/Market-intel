@@ -204,6 +204,17 @@ export async function processAlertDigests(opts?: {
   force?: boolean;
   /** When set (UI send-now), only this subscription email is targeted */
   onlyEmail?: string;
+  /**
+   * Exact filters open on the dashboard when the user clicked Send.
+   * Captures that view as full-page PNG + multi-page PDF.
+   */
+  viewSnapshot?: {
+    tab: 'overview' | 'competitor';
+    range: '7d' | '30d' | '90d' | 'All';
+    client: string;
+    source: string;
+    businessLine: string;
+  };
 }): Promise<{
   ok: boolean;
   subscribers: number;
@@ -327,30 +338,35 @@ export async function processAlertDigests(opts?: {
       const primaryClient =
         clientsInvolved[0] ||
         (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
-      // Screenshots use All dates (not 7d) and skip business-line filters so the PNG
-      // is not empty when recent windows have no threads / narrow line filters zero-out.
-      const focus = primaryClient
-        ? {
-            client: primaryClient,
-            tab: 'overview' as const,
-            range: 'All' as const,
-            eventOnly: true as const,
-            skipLineFilter: true as const,
-          }
-        : {
-            tab: 'overview' as const,
-            range: 'All' as const,
-            eventOnly: false as const,
-            skipLineFilter: true as const,
-          };
+      // Prefer exact UI snapshot when user clicked Send (what was open on screen).
+      // Otherwise auto-alerts use All dates + skip line filters.
+      let focus: import('@/lib/dashboardScreenshot').ScreenshotFocus;
+      if (opts?.viewSnapshot) {
+        const { focusFromViewSnapshot } = await import('@/lib/dashboardScreenshot');
+        focus = focusFromViewSnapshot(opts.viewSnapshot);
+      } else if (primaryClient) {
+        focus = {
+          client: primaryClient,
+          tab: 'overview',
+          range: 'All',
+          eventOnly: true,
+          skipLineFilter: true,
+        };
+      } else {
+        focus = {
+          tab: 'overview',
+          range: 'All',
+          eventOnly: false,
+          skipLineFilter: true,
+        };
+      }
 
-      // Screenshots are best-effort on Vercel (Chromium may fail). Always still send the email.
+      // Screenshots are best-effort on Vercel. Always still send the email.
       let shots: Awaited<ReturnType<typeof captureDashboardScreenshots>> = [];
       try {
         shots = await captureDashboardScreenshots(sub, focus);
       } catch (shotErr: any) {
         console.error('[alerts] screenshot capture failed (email still sending):', shotErr);
-        // Short, user-facing note (full error stays in server logs)
         const msg = String(shotErr?.message || shotErr);
         const short =
           msg.includes('browsers.json') || msg.includes('playwright')
@@ -359,17 +375,31 @@ export async function processAlertDigests(opts?: {
         errors.push(`${sub.email}: screenshot skipped — ${short}`);
       }
 
+      // Always try full-page PDF when we have PNG(s)
       let pdf: Buffer | null = null;
       if (shots.length) {
         try {
           pdf = await screenshotsToPdf(shots);
         } catch (pdfErr: any) {
           console.error('[alerts] PDF embed failed (still sending email):', pdfErr);
+          errors.push(`${sub.email}: PDF build failed — PNG still attached if present`);
         }
       }
 
-      const dashUrl = dashboardUrlForSubscription(sub, 'overview', focus);
+      const dashUrl = dashboardUrlForSubscription(sub, focus.tab || 'overview', focus);
       const unsubUrl = `${base}/api/notifications/unsubscribe?token=${encodeURIComponent(sub.unsubscribe_token)}`;
+      const snapLabel = opts?.viewSnapshot
+        ? [
+            opts.viewSnapshot.tab,
+            opts.viewSnapshot.range,
+            opts.viewSnapshot.client !== 'All' ? opts.viewSnapshot.client : null,
+            opts.viewSnapshot.businessLine !== 'All' ? opts.viewSnapshot.businessLine : null,
+            opts.viewSnapshot.source !== 'All' ? opts.viewSnapshot.source : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        : undefined;
+
       const { subject, html, text } = buildEventAlertEmail({
         matches,
         clientsInvolved,
@@ -379,23 +409,27 @@ export async function processAlertDigests(opts?: {
         hasPdf: !!pdf,
         shotCount: shots.length,
         manualSend: !!opts?.force,
+        exactSnapshot: !!opts?.viewSnapshot,
+        snapshotLabel: snapLabel,
       });
 
+      const dateStamp = new Date().toISOString().slice(0, 10);
       const attachments = [
-        ...shots.map((s) => ({
-          filename: s.filename,
-          content: s.buffer,
-          contentType: 'image/png' as const,
-        })),
+        // Full-page PDF first (primary deliverable for “whole page”)
         ...(pdf
           ? [
               {
-                filename: `market-vantage-event-${new Date().toISOString().slice(0, 10)}.pdf`,
+                filename: `market-vantage-dashboard-${dateStamp}.pdf`,
                 content: pdf,
                 contentType: 'application/pdf' as const,
               },
             ]
           : []),
+        ...shots.map((s) => ({
+          filename: s.filename,
+          content: s.buffer,
+          contentType: 'image/png' as const,
+        })),
       ];
 
       const sent = await sendEmail({
@@ -452,6 +486,8 @@ function buildEventAlertEmail(opts: {
   hasPdf: boolean;
   shotCount: number;
   manualSend?: boolean;
+  exactSnapshot?: boolean;
+  snapshotLabel?: string;
 }): { subject: string; html: string; text: string } {
   const {
     matches,
@@ -462,6 +498,8 @@ function buildEventAlertEmail(opts: {
     hasPdf,
     shotCount,
     manualSend,
+    exactSnapshot,
+    snapshotLabel,
   } = opts;
   const n = matches.length;
   const multiClient = clientsInvolved.length > 1;
@@ -469,8 +507,9 @@ function buildEventAlertEmail(opts: {
     ? clientsInvolved.slice(0, 4).join(', ') + (clientsInvolved.length > 4 ? '…' : '')
     : primaryClient;
 
-  const subject =
-    n === 0
+  const subject = exactSnapshot
+    ? `Market Vantage | Dashboard snapshot${snapshotLabel ? ` · ${snapshotLabel}` : ''}`
+    : n === 0
       ? `Market Vantage | Dashboard report (no new events in window)`
       : n === 1
         ? `Market Vantage | New activity detected for ${primaryClient}`
@@ -478,13 +517,18 @@ function buildEventAlertEmail(opts: {
           ? `Market Vantage | ${n} new events across ${clientPhrase}`
           : `Market Vantage | ${n} new events detected for ${primaryClient}`;
 
-  const headline =
-    n === 0
+  const headline = exactSnapshot
+    ? 'Dashboard snapshot (exact view)'
+    : n === 0
       ? 'Dashboard status report'
       : 'New activity requires your attention';
 
-  const intro =
-    n === 0
+  const intro = exactSnapshot
+    ? `This email includes a <strong>full-page PDF</strong> and PNG of the Market Vantage dashboard
+       <strong>exactly as it was open</strong> when you clicked Send
+       ${snapshotLabel ? `(<em>${escapeHtml(snapshotLabel)}</em>)` : ''}.
+       Use the attachments as a record of that view, or reopen the same filters via the link below.`
+    : n === 0
       ? `This is a <strong>manual status report</strong> you requested from Market Vantage. There were <strong>no new matching conversations</strong> in the recent lookback window for your filters. A live screenshot of the dashboard is attached for your review.`
       : `We have detected <strong>${n} new public conversation${n === 1 ? '' : 's'}</strong>
           matching your alert criteria
@@ -526,9 +570,11 @@ function buildEventAlertEmail(opts: {
       ? `<p style="font-size:13px;color:#5c5470;margin-top:8px">Plus ${n - 8} additional matching event${n - 8 === 1 ? '' : 's'} — open the dashboard for the full list.</p>`
       : '';
 
-  const footerNote = manualSend
-    ? 'You requested this email using “Send email now” in Market Vantage.'
-    : 'Only new activity since your last automatic notification is included.';
+  const footerNote = exactSnapshot
+    ? 'You requested this email using “Send email now” — capture reflects the filters open on your screen at send time.'
+    : manualSend
+      ? 'You requested this email using “Send email now” in Market Vantage.'
+      : 'Only new activity since your last automatic notification is included.';
 
   const html = `
 <!DOCTYPE html>
@@ -548,8 +594,13 @@ function buildEventAlertEmail(opts: {
           ${intro}
         </p>
         <p style="margin:0 0 18px;font-size:15px;line-height:1.55;color:#3d3555">
-          A live screenshot of the Market Vantage dashboard${n > 0 ? ' — filtered to this context —' : ''} is attached
-          so you can assess the situation quickly. You may also open the interactive dashboard using the button below.
+          ${
+            exactSnapshot
+              ? 'Attached: <strong>full-page PDF</strong> of the entire dashboard scroll, plus a PNG of the same capture.'
+              : `A live screenshot of the Market Vantage dashboard${n > 0 ? ' — filtered to this context —' : ''} is attached
+          so you can assess the situation quickly.`
+          }
+          You may also open the interactive dashboard using the button below.
         </p>
 
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 20px">
@@ -574,8 +625,8 @@ function buildEventAlertEmail(opts: {
         <p style="margin:22px 0 0;font-size:13px;line-height:1.5;color:#5c5470">
           ${
             shotCount > 0
-              ? `Attachments: ${shotCount} live dashboard screenshot${shotCount === 1 ? '' : 's'} (PNG)${hasPdf ? ' and a PDF of the same capture' : ''}.`
-              : 'Open the dashboard link above for the live view (screenshot attachment was unavailable on this send).'
+              ? `Attachments: ${hasPdf ? 'full-page PDF + ' : ''}${shotCount} full-page PNG screenshot${shotCount === 1 ? '' : 's'}.`
+              : 'Open the dashboard link above for the live view (screenshot/PDF capture was unavailable on this send).'
           }
         </p>
         <p style="margin:10px 0 0;font-size:12px;line-height:1.5;color:#8a8299;word-break:break-all">
