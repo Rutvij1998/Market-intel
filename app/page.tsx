@@ -85,7 +85,7 @@ export default function HomePage() {
         <div className="relative max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-16 sm:pb-20">
           <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--primary)] mb-6">
             <Lock className="h-3 w-3" />
-            Likewize internal · password protected
+            Likewize internal
           </div>
           <h1 className="text-4xl sm:text-5xl lg:text-[3.25rem] font-semibold tracking-tight leading-[1.1] max-w-3xl text-[var(--foreground)]">
             Market intelligence for Device Protection — built for Likewize.
