@@ -3,7 +3,9 @@
  *
  * Local: Playwright (full install)
  * Vercel/serverless: puppeteer-core + @sparticuz/chromium
- *   (Playwright browsers.json is NOT available under /var/task)
+ *
+ * Screenshots always use range=All by default so the image is not empty when
+ * recent windows (7d) have no new threads.
  */
 
 import { dashboardCredentials } from '@/lib/sessionAuth';
@@ -21,6 +23,8 @@ export interface ScreenshotFocus {
   tab?: 'overview' | 'competitor';
   range?: '7d' | '30d' | '90d' | 'All';
   eventOnly?: boolean;
+  /** When true (default for alerts), skip business-line filter so the shot has data */
+  skipLineFilter?: boolean;
 }
 
 export interface DashboardShot {
@@ -58,6 +62,10 @@ function pngDimensions(buf: Buffer): { width: number; height: number } {
   };
 }
 
+/**
+ * Build dashboard URL for screenshots / deep links.
+ * Defaults to range=All so empty 7d windows are avoided.
+ */
 export function dashboardUrlForSubscription(
   sub: ScreenshotSub,
   tab?: 'overview' | 'competitor',
@@ -73,14 +81,20 @@ export function dashboardUrlForSubscription(
     (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
   if (client) u.searchParams.set('client', client);
 
-  const line =
-    focus?.line ||
-    (!sub.all_business_lines && sub.business_lines?.length === 1
-      ? sub.business_lines[0]
-      : undefined);
-  if (line) u.searchParams.set('line', line);
+  // Line filters often zero-out the board; only apply when explicitly requested
+  const skipLine = focus?.skipLineFilter !== false;
+  if (!skipLine) {
+    const line =
+      focus?.line ||
+      (!sub.all_business_lines && sub.business_lines?.length === 1
+        ? sub.business_lines[0]
+        : undefined);
+    if (line) u.searchParams.set('line', line);
+  }
 
-  u.searchParams.set('range', focus?.range || '7d');
+  // Never default to 7d for captures — stale ingest makes that empty
+  const range = focus?.range && focus.range !== '7d' ? focus.range : 'All';
+  u.searchParams.set('range', range);
   u.searchParams.set('screenshot', '1');
   return u.toString();
 }
@@ -98,12 +112,115 @@ function shotFromPng(buffer: Buffer, filename: string, label: string): Dashboard
   };
 }
 
-/** Puppeteer + @sparticuz/chromium — works on Vercel/Lambda. */
-async function captureWithPuppeteer(
-  targets: { url: string; filename: string; label: string }[],
-): Promise<DashboardShot[]> {
+async function loginCookies(base: string): Promise<{ name: string; value: string }[]> {
+  const { username, password } = dashboardCredentials();
+  const nodeLogin = await fetch(`${base}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!nodeLogin.ok) {
+    const body = await nodeLogin.text().catch(() => '');
+    throw new Error(`Screenshot login failed HTTP ${nodeLogin.status}: ${body.slice(0, 200)}`);
+  }
+  const setCookie = nodeLogin.headers.getSetCookie?.() || [];
+  const cookieHeader = nodeLogin.headers.get('set-cookie');
+  const rawCookies =
+    setCookie.length > 0
+      ? setCookie
+      : cookieHeader
+        ? cookieHeader.split(/,(?=\s*[^;]+=)/)
+        : [];
+
+  const out: { name: string; value: string }[] = [];
+  for (const raw of rawCookies) {
+    const [pair] = raw.split(';');
+    const eq = pair?.indexOf('=') ?? -1;
+    if (eq < 0) continue;
+    const name = pair!.slice(0, eq).trim();
+    const value = pair!.slice(eq + 1).trim();
+    if (name) out.push({ name, value });
+  }
+  return out;
+}
+
+/** True if the live page looks empty (no chart data). */
+async function pageLooksEmpty(getText: () => Promise<string>): Promise<boolean> {
+  const text = await getText();
+  if (/No real data yet/i.test(text)) return true;
+  if (/No data in current filter/i.test(text)) return true;
+  if (/No source data in this window/i.test(text) && /LIKEWIZE MENTIONS[\s\S]{0,40}\b0\b/i.test(text)) {
+    return true;
+  }
+  // KPI strip showing zeros for main count
+  if (/LIKEWIZE MENTIONS\s*0\b/i.test(text) && /POSITIVE SENTIMENT\s*0%/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+type Target = { url: string; filename: string; label: string };
+
+function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus): Target[] {
+  const eventOnly = focus?.eventOnly !== false && !!focus?.client;
+  const baseFocus: ScreenshotFocus = {
+    ...focus,
+    range: 'All',
+    skipLineFilter: true,
+  };
+
+  if (eventOnly) {
+    const tab = focus?.tab || 'overview';
+    const labelClient = focus?.client || 'event';
+    const safe = labelClient.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 40);
+    return [
+      {
+        url: dashboardUrlForSubscription(sub, tab, { ...baseFocus, client: focus?.client }),
+        filename: `market-vantage-${safe}.png`,
+        label: `Dashboard · ${labelClient} · All dates`,
+      },
+      // Fallback: unfiltered overview if client filter is empty
+      {
+        url: dashboardUrlForSubscription(sub, 'overview', {
+          range: 'All',
+          skipLineFilter: true,
+          eventOnly: false,
+        }),
+        filename: `market-vantage-${safe}-fallback.png`,
+        label: 'Dashboard · Overview · All dates',
+      },
+    ];
+  }
+
+  return [
+    {
+      url: dashboardUrlForSubscription(sub, 'overview', baseFocus),
+      filename: 'market-vantage-overview.png',
+      label: 'Dashboard · Overview · All dates',
+    },
+  ];
+}
+
+async function settleDashboard(
+  waitForSelector: (sel: string, opts: { timeout: number }) => Promise<unknown>,
+  waitMs: (ms: number) => Promise<void>,
+) {
+  try {
+    await waitForSelector('[data-dashboard-ready="true"]', { timeout: 45_000 });
+  } catch {
+    await waitForSelector('.mv-app-shell', { timeout: 20_000 });
+  }
+  // Let Recharts + filters re-render after deep-link state applies
+  await waitMs(isServerless() ? 3500 : 4500);
+}
+
+/** Puppeteer + @sparticuz/chromium — Vercel/Lambda. */
+async function captureWithPuppeteer(targets: Target[]): Promise<DashboardShot[]> {
   const chromium = (await import('@sparticuz/chromium')).default;
   const puppeteer = (await import('puppeteer-core')).default;
+  const base = appBaseUrl();
+  const cookies = await loginCookies(base);
+  const host = new URL(base).hostname;
 
   const executablePath = await chromium.executablePath();
   console.log('[screenshot] serverless puppeteer chromium:', executablePath);
@@ -117,54 +234,10 @@ async function captureWithPuppeteer(
 
   try {
     const page = await browser.newPage();
-    const base = appBaseUrl();
-    const { username, password } = dashboardCredentials();
-
-    // Login via HTTP API (sets cookies on the browser context)
-    const loginRes = await page.evaluate(
-      async (opts: { url: string; username: string; password: string }) => {
-        const res = await fetch(opts.url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: opts.username, password: opts.password }),
-          credentials: 'include',
-        });
-        return { ok: res.ok, status: res.status, text: await res.text() };
-      },
-      { url: `${base}/api/auth/login`, username, password },
-    );
-
-    // page.evaluate fetch may not store Set-Cookie into the browser jar on all runtimes.
-    // Prefer setCookie from a real Node-side login.
-    const nodeLogin = await fetch(`${base}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!nodeLogin.ok) {
-      const body = await nodeLogin.text().catch(() => '');
-      throw new Error(`Screenshot login failed HTTP ${nodeLogin.status}: ${body.slice(0, 200)}`);
-    }
-    const setCookie = nodeLogin.headers.getSetCookie?.() || [];
-    const cookieHeader = nodeLogin.headers.get('set-cookie');
-    const rawCookies =
-      setCookie.length > 0
-        ? setCookie
-        : cookieHeader
-          ? cookieHeader.split(/,(?=\s*[^;]+=)/)
-          : [];
-
-    const host = new URL(base).hostname;
-    for (const raw of rawCookies) {
-      const [pair] = raw.split(';');
-      const eq = pair?.indexOf('=') ?? -1;
-      if (eq < 0) continue;
-      const name = pair!.slice(0, eq).trim();
-      const value = pair!.slice(eq + 1).trim();
-      if (!name) continue;
+    for (const c of cookies) {
       await page.setCookie({
-        name,
-        value,
+        name: c.name,
+        value: c.value,
         domain: host,
         path: '/',
         httpOnly: true,
@@ -172,41 +245,55 @@ async function captureWithPuppeteer(
         sameSite: 'Lax',
       });
     }
-    void loginRes; // evaluated login is best-effort; cookie jar from nodeLogin is authoritative
 
-    const shots: DashboardShot[] = [];
+    let chosen: Target | null = null;
     for (const t of targets) {
       console.log(`[screenshot] Opening ${t.url}`);
       const res = await page.goto(t.url, {
         waitUntil: 'domcontentloaded',
-        timeout: 45_000,
+        timeout: 50_000,
       });
       if (res && res.status() >= 400) {
-        throw new Error(`Dashboard returned HTTP ${res.status()} for ${t.url}`);
+        console.warn(`[screenshot] HTTP ${res.status()} for ${t.url}`);
+        continue;
       }
       if (page.url().includes('/sign-in')) {
         throw new Error(`Screenshot landed on sign-in (${page.url()})`);
       }
-      try {
-        await page.waitForSelector('[data-dashboard-ready="true"]', { timeout: 40_000 });
-      } catch {
-        await page.waitForSelector('.mv-app-shell', { timeout: 15_000 });
+      await settleDashboard(
+        (sel, opts) => page.waitForSelector(sel, opts),
+        (ms) => new Promise((r) => setTimeout(r, ms)),
+      );
+      const empty = await pageLooksEmpty(() => page.evaluate(() => document.body.innerText));
+      if (empty) {
+        console.warn(`[screenshot] Empty UI for ${t.url} — trying next URL`);
+        continue;
       }
-      await new Promise((r) => setTimeout(r, 2000));
-      const png = Buffer.from(await page.screenshot({ type: 'png', fullPage: false }));
-      shots.push(shotFromPng(png, t.filename, t.label));
+      chosen = t;
+      break;
     }
-    return shots;
+
+    // Last resort: capture whatever we have (prefer last target = broadest)
+    if (!chosen) {
+      const t = targets[targets.length - 1]!;
+      console.warn(`[screenshot] All targets looked empty; capturing fallback ${t.url}`);
+      await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 50_000 });
+      await settleDashboard(
+        (sel, opts) => page.waitForSelector(sel, opts),
+        (ms) => new Promise((r) => setTimeout(r, ms)),
+      );
+      chosen = t;
+    }
+
+    const png = Buffer.from(await page.screenshot({ type: 'png', fullPage: false }));
+    return [shotFromPng(png, chosen.filename.replace(/-fallback/, ''), chosen.label)];
   } finally {
     await browser.close().catch(() => undefined);
   }
 }
 
-/** Full Playwright — local/dev only (never import on Vercel). */
-async function captureWithPlaywright(
-  targets: { url: string; filename: string; label: string }[],
-): Promise<DashboardShot[]> {
-  // Dynamic import keeps this out of the serverless graph when isServerless() is true
+/** Full Playwright — local/dev only. */
+async function captureWithPlaywright(targets: Target[]): Promise<DashboardShot[]> {
   const { chromium } = await import('playwright');
   const browser = await chromium.launch({
     headless: true,
@@ -230,67 +317,49 @@ async function captureWithPlaywright(
       throw new Error(`Screenshot login failed HTTP ${loginRes.status()}: ${body.slice(0, 200)}`);
     }
 
-    const shots: DashboardShot[] = [];
+    let chosen: Target | null = null;
     for (const t of targets) {
       console.log(`[screenshot] Opening ${t.url}`);
-      const res = await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-      if (res && res.status() >= 400) {
-        throw new Error(`Dashboard returned HTTP ${res.status()} for ${t.url}`);
-      }
+      const res = await page.goto(t.url, { waitUntil: 'networkidle', timeout: 90_000 });
+      if (res && res.status() >= 400) continue;
       if (page.url().includes('/sign-in')) {
         throw new Error(`Screenshot landed on sign-in (${page.url()})`);
       }
-      try {
-        await page.waitForSelector('[data-dashboard-ready="true"]', { timeout: 60_000 });
-      } catch {
-        await page.waitForSelector('.mv-app-shell', { timeout: 30_000 });
-      }
-      await page.waitForTimeout(3000);
-      const png = Buffer.from(
-        await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled' }),
+      await settleDashboard(
+        (sel, opts) => page.waitForSelector(sel, opts),
+        (ms) => page.waitForTimeout(ms),
       );
-      shots.push(shotFromPng(png, t.filename, t.label));
+      const empty = await pageLooksEmpty(() => page.innerText('body'));
+      if (empty) {
+        console.warn(`[screenshot] Empty UI for ${t.url} — trying next`);
+        continue;
+      }
+      chosen = t;
+      break;
     }
+    if (!chosen) {
+      const t = targets[targets.length - 1]!;
+      await page.goto(t.url, { waitUntil: 'networkidle', timeout: 90_000 });
+      await settleDashboard(
+        (sel, opts) => page.waitForSelector(sel, opts),
+        (ms) => page.waitForTimeout(ms),
+      );
+      chosen = t;
+    }
+
+    const png = Buffer.from(
+      await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled' }),
+    );
     await context.close();
-    return shots;
+    return [shotFromPng(png, chosen.filename.replace(/-fallback/, ''), chosen.label)];
   } finally {
     await browser.close().catch(() => undefined);
   }
 }
 
-function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus) {
-  const eventOnly = focus?.eventOnly !== false && !!focus?.client;
-  if (eventOnly) {
-    const tab = focus?.tab || 'overview';
-    const labelClient = focus?.client || 'event';
-    const safe = labelClient.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 40);
-    return [
-      {
-        url: dashboardUrlForSubscription(sub, tab, focus),
-        filename: `market-vantage-${safe}.png`,
-        label: `Dashboard · ${labelClient}${focus?.line ? ` · ${focus.line}` : ''}`,
-      },
-    ];
-  }
-  const list = [
-    {
-      url: dashboardUrlForSubscription(sub, 'overview', focus),
-      filename: 'market-vantage-overview.png',
-      label: 'Dashboard · Overview',
-    },
-  ];
-  if (!isServerless()) {
-    list.push({
-      url: dashboardUrlForSubscription(sub, 'competitor', focus),
-      filename: 'market-vantage-competitor.png',
-      label: 'Dashboard · Competitor Analysis',
-    });
-  }
-  return list;
-}
-
 /**
  * Capture live dashboard PNG(s). Uses puppeteer on Vercel; Playwright locally.
+ * Prefers range=All and skips line filters; falls back to unfiltered overview if empty.
  */
 export async function captureDashboardScreenshots(
   sub: ScreenshotSub,

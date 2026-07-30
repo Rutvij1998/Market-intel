@@ -327,19 +327,21 @@ export async function processAlertDigests(opts?: {
       const primaryClient =
         clientsInvolved[0] ||
         (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
-      const primaryLine = matches.find((m) => m.client === primaryClient)?.business_line;
+      // Screenshots use All dates (not 7d) and skip business-line filters so the PNG
+      // is not empty when recent windows have no threads / narrow line filters zero-out.
       const focus = primaryClient
         ? {
             client: primaryClient,
-            line: primaryLine && primaryLine !== 'Other' ? String(primaryLine) : undefined,
             tab: 'overview' as const,
-            range: '7d' as const,
+            range: 'All' as const,
             eventOnly: true as const,
+            skipLineFilter: true as const,
           }
         : {
             tab: 'overview' as const,
-            range: '7d' as const,
+            range: 'All' as const,
             eventOnly: false as const,
+            skipLineFilter: true as const,
           };
 
       // Screenshots are best-effort on Vercel (Chromium may fail). Always still send the email.

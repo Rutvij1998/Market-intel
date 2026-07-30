@@ -437,7 +437,7 @@ export default function MarketIntelDashboard() {
     }
   }
 
-  // Deep-link filters for alert screenshots / shared URLs: ?client=&line=&source=&tab=&range=
+  // Deep-link filters for alert screenshots / shared URLs: ?client=&line=&source=&tab=&range=&screenshot=
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -446,13 +446,29 @@ export default function MarketIntelDashboard() {
     const source = params.get('source');
     const tab = params.get('tab');
     const range = params.get('range');
+    const screenshotMode = params.get('screenshot') === '1';
+
     if (client) setActiveClient(client);
-    if (line && ['DP', 'HomeTech', 'TradeIn', 'Shipping', 'CallCenter', 'Other'].includes(line)) {
+    // In screenshot mode, skip line filter unless explicitly provided AND not empty-prone —
+    // email captures already omit line; still honor explicit ?line= when present.
+    if (
+      line &&
+      ['DP', 'HomeTech', 'TradeIn', 'Shipping', 'CallCenter', 'Other'].includes(line) &&
+      !screenshotMode
+    ) {
       setActiveBusinessLine(line as BusinessLine);
+    } else if (line && screenshotMode && ['DP', 'HomeTech', 'TradeIn', 'Shipping', 'CallCenter', 'Other'].includes(line)) {
+      // Only apply line in screenshot if URL has it (optional); prefer All lines for full board
+      // Leave business line at All for richer screenshots
+      setActiveBusinessLine('All');
     }
     if (source) setActiveSource(source);
     if (tab === 'competitor' || tab === 'overview') setActiveTab(tab);
-    if (range === '7d' || range === '30d' || range === '90d' || range === 'All') {
+
+    // Screenshot emails must not land on empty 7d windows when data is older
+    if (screenshotMode) {
+      setActiveRange(range === '30d' || range === '90d' || range === 'All' ? range : 'All');
+    } else if (range === '7d' || range === '30d' || range === '90d' || range === 'All') {
       setActiveRange(range);
     }
   }, []);
