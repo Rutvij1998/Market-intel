@@ -40,7 +40,7 @@ import { toast } from "sonner";
 // Detect obvious misconfiguration so we can show a clear banner instead of silent empty + scary console errors
 const isSupabaseConfigured = !!supabase;
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell, PieChart, Pie } from "recharts";
-import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
+import { ChartTooltipContent } from "@/components/ui/chart";
 
 // Brand palette from protect.likewize.com (theme main.css)
 const PURPLE = "#3200BE";
