@@ -391,16 +391,32 @@ export async function scrapePissedConsumer(): Promise<RawMention[]> {
 function scrapeBBBCompany(
   company: 'Likewize' | 'Asurion',
   maxPages: number,
+  opts: { timeoutMs?: number } = {},
 ): Promise<RawMention[]> {
   const scriptPath = path.join(process.cwd(), 'scripts', 'scrape_bbb.py');
+  // Vercel serverless rarely has python+cloudscraper; still cap wait so cron never hangs.
+  const timeoutMs =
+    typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0
+      ? opts.timeoutMs
+      : process.env.VERCEL
+        ? 45_000
+        : 10 * 60_000;
+
   console.log(
-    `[Scrapers][BBB] Starting ${company} BBB scrape (up to ${maxPages} pages via cloudscraper)...`,
+    `[Scrapers][BBB] Starting ${company} BBB scrape (up to ${maxPages} pages, timeout ${Math.round(timeoutMs / 1000)}s)...`,
   );
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (results: RawMention[]) => {
+      if (settled) return;
+      settled = true;
+      resolve(results);
+    };
+
     const child = spawn(
       'python3',
-      [scriptPath, '--company', company, '--max-pages', String(maxPages), '--delay', '1.0'],
+      [scriptPath, '--company', company, '--max-pages', String(maxPages), '--delay', '0.6'],
       { cwd: process.cwd(), env: process.env },
     );
 
@@ -417,22 +433,61 @@ function scrapeBBBCompany(
       }
     });
 
+    const killer = setTimeout(() => {
+      console.warn(
+        `[Scrapers][BBB] ${company} scrape timed out after ${Math.round(timeoutMs / 1000)}s — killing process`,
+      );
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+      // Best-effort partial parse if any JSON arrived
+      try {
+        const jsonStart = stdout.indexOf('{');
+        if (jsonStart >= 0) {
+          const payload = JSON.parse(stdout.slice(jsonStart));
+          const reviews = Array.isArray(payload.reviews) ? payload.reviews : [];
+          finish(
+            reviews.map((r: any) => ({
+              id: String(r.id || `bbb-${Math.random().toString(36).slice(2)}`),
+              text: String(r.text || '').slice(0, 1500),
+              source: 'BBB',
+              url: String(r.url || 'https://www.bbb.org/'),
+              created_at: r.created_at || new Date().toISOString(),
+              title: String(r.title || `${company} BBB review`).slice(0, 200),
+              rating: typeof r.rating === 'number' ? r.rating : null,
+              company: (r.company === 'Asurion' || company === 'Asurion' ? 'Asurion' : 'Likewize') as string,
+              author: r.author,
+            })),
+          );
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      finish([]);
+    }, timeoutMs);
+
     child.on('error', (err) => {
+      clearTimeout(killer);
       console.log(`[Scrapers][BBB] Failed to start python: ${err.message}`);
-      resolve([]);
+      finish([]);
     });
 
     child.on('close', (code) => {
+      clearTimeout(killer);
+      if (settled) return;
       if (code !== 0 && !stdout.trim()) {
         console.log(`[Scrapers][BBB] Script exited ${code}. ${stderr.slice(0, 300)}`);
-        resolve([]);
+        finish([]);
         return;
       }
       try {
         const jsonStart = stdout.indexOf('{');
         if (jsonStart < 0) {
           console.log(`[Scrapers][BBB] No JSON in output for ${company}`);
-          resolve([]);
+          finish([]);
           return;
         }
         const payload = JSON.parse(stdout.slice(jsonStart));
@@ -455,22 +510,28 @@ function scrapeBBBCompany(
           `[Scrapers][BBB] Collected ${results.length} unique ${company} BBB reviews ` +
             `(pages=${payload.pages || '?'}, max_detected=${payload.max_page_detected || '?'}).`,
         );
-        resolve(results);
+        finish(results);
       } catch (e: any) {
         console.log(
           `[Scrapers][BBB] Parse failed (${company}): ${e?.message}. stdout head: ${stdout.slice(0, 200)}`,
         );
-        resolve([]);
+        finish([]);
       }
     });
   });
 }
 
-export async function scrapeLikewizeBBB(maxPages = 80): Promise<RawMention[]> {
-  return scrapeBBBCompany('Likewize', maxPages);
+export async function scrapeLikewizeBBB(
+  maxPages = 80,
+  opts: { timeoutMs?: number } = {},
+): Promise<RawMention[]> {
+  return scrapeBBBCompany('Likewize', maxPages, opts);
 }
 
 /** Asurion BBB reviews — competitor analysis only (not Overview). */
-export async function scrapeAsurionBBB(maxPages = 1000): Promise<RawMention[]> {
-  return scrapeBBBCompany('Asurion', maxPages);
+export async function scrapeAsurionBBB(
+  maxPages = 1000,
+  opts: { timeoutMs?: number } = {},
+): Promise<RawMention[]> {
+  return scrapeBBBCompany('Asurion', maxPages, opts);
 }

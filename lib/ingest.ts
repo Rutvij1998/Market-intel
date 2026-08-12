@@ -332,10 +332,25 @@ export async function runIngestion({
    * falls within this lookback (e.g. 24). Full/manual sync omit this.
    */
   sinceHours,
+  /**
+   * Soft deadline for serverless (Vercel maxDuration is 300s). Leave headroom
+   * to finish DB writes + job_runs logging. When hit, return partial success.
+   */
+  maxRuntimeMs,
 }: {
   mode?: 'full' | 'update';
   sinceHours?: number;
+  maxRuntimeMs?: number;
 } = {}) {
+  const startedAtMs = Date.now();
+  const deadlineAt =
+    typeof maxRuntimeMs === 'number' && maxRuntimeMs > 0
+      ? startedAtMs + maxRuntimeMs
+      : null;
+  const timeLeft = () => (deadlineAt == null ? Infinity : deadlineAt - Date.now());
+  const pastDeadline = (reserveMs = 12_000) =>
+    deadlineAt != null && Date.now() >= deadlineAt - reserveMs;
+
   const isFull = mode === 'full';
   const recentWindow =
     typeof sinceHours === 'number' && sinceHours > 0 ? sinceHours : null;
@@ -346,44 +361,80 @@ export async function runIngestion({
         ? 'week'
         : 'all';
 
-  // Heavy Sam backfill is for full/manual runs; daily cron stays light.
-  await repairMislabeledSources({ skipBackfill: !!recentWindow });
+  // Daily cron: skip full-table repair (too slow for 300s budget). Manual/full still repair.
+  if (!recentWindow) {
+    await repairMislabeledSources({ skipBackfill: false });
+  } else {
+    console.log('[Ingest] Cron/window mode: skipping repairMislabeledSources for speed');
+  }
 
   // Sources: Reddit + PissedConsumer + Likewize BBB + Asurion BBB.
-  // Cron (sinceHours) uses smaller caps; full/manual stays wide.
-  const fetchLimit = isFull ? 700 : recentWindow ? 220 : 450;
-  const bbbLikewizePages = isFull ? 80 : recentWindow ? 8 : 80;
-  const bbbAsurionPages = isFull ? 1000 : recentWindow ? 15 : 1000;
+  // Cron (sinceHours) uses aggressive caps so we finish under Vercel maxDuration.
+  const fetchLimit = isFull ? 700 : recentWindow ? 80 : 450;
+  const bbbLikewizePages = isFull ? 80 : recentWindow ? 2 : 80;
+  const bbbAsurionPages = isFull ? 1000 : recentWindow ? 3 : 1000;
+  const bbbTimeoutMs = recentWindow ? 35_000 : process.env.VERCEL ? 45_000 : undefined;
 
   console.log(
     `[Ingest] Starting ingestion (${isFull ? 'full' : 'update'}` +
-      `${recentWindow ? `, last ${recentWindow}h only` : ''}). ` +
-      `Sources: Reddit (time=${redditTime}) + PissedConsumer + BBB.`,
+      `${recentWindow ? `, last ${recentWindow}h only` : ''}` +
+      `${deadlineAt ? `, budget ${Math.round(maxRuntimeMs! / 1000)}s` : ''}). ` +
+      `Sources: Reddit (time=${redditTime}, limit=${fetchLimit}) + PissedConsumer + BBB ` +
+      `(lw≤${bbbLikewizePages}p, as≤${bbbAsurionPages}p).`,
   );
 
-  const redditRaw = await fetchDeviceProtectionMentions(fetchLimit, { time: redditTime });
-  const pcRaw = await scrapePissedConsumer();
-  const bbbLikewizeRaw = await scrapeLikewizeBBB(bbbLikewizePages);
-  const bbbAsurionRaw = await scrapeAsurionBBB(bbbAsurionPages);
+  // Parallel scrapes with individual failure isolation (don't fail whole run)
+  const withFallback = async <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e: any) {
+      console.warn(`[Ingest] ${label} failed:`, e?.message || e);
+      return fallback;
+    }
+  };
+
+  const [redditRaw, pcRaw, bbbLikewizeRaw, bbbAsurionRaw] = await Promise.all([
+    withFallback('Reddit', () => fetchDeviceProtectionMentions(fetchLimit, { time: redditTime }), [] as any[]),
+    withFallback('PissedConsumer', () => scrapePissedConsumer(), [] as any[]),
+    withFallback(
+      'BBB Likewize',
+      () => scrapeLikewizeBBB(bbbLikewizePages, { timeoutMs: bbbTimeoutMs }),
+      [] as any[],
+    ),
+    withFallback(
+      'BBB Asurion',
+      () => scrapeAsurionBBB(bbbAsurionPages, { timeoutMs: bbbTimeoutMs }),
+      [] as any[],
+    ),
+  ]);
   const bbbRaw = [...bbbLikewizeRaw, ...bbbAsurionRaw];
+  console.log(
+    `[Ingest] Scrape done in ${Math.round((Date.now() - startedAtMs) / 1000)}s · ` +
+      `reddit=${redditRaw.length} pc=${pcRaw.length} bbb=${bbbRaw.length} · ` +
+      `${Math.round(timeLeft() / 1000)}s budget left`,
+  );
 
   // Index u/Asurion_Sam comments → merge into Asurion mentions for official-reply metrics
   let samIndex: SamIndex = new Map();
-  try {
-    samIndex = await fetchAsurionSamReplyIndex(recentWindow ? 150 : 1000);
-  } catch (e: any) {
-    console.warn('[Ingest] Could not load Asurion_Sam history:', e?.message || e);
+  if (!pastDeadline(20_000)) {
+    try {
+      samIndex = await fetchAsurionSamReplyIndex(recentWindow ? 80 : 1000);
+    } catch (e: any) {
+      console.warn('[Ingest] Could not load Asurion_Sam history:', e?.message || e);
+    }
+  } else {
+    console.warn('[Ingest] Skipping Asurion_Sam index (time budget)');
   }
 
   // Pull parent posts of Sam replies that our scrape may have missed
   let samParents: any[] = [];
-  if (samIndex.size) {
+  if (samIndex.size && !pastDeadline(15_000)) {
     const existingIds = new Set(redditRaw.map((r) => r.id));
     try {
       samParents = await hydrateAsurionSamParentThreads(
         samIndex,
         existingIds,
-        recentWindow ? 25 : 100,
+        recentWindow ? 10 : 100,
       );
     } catch (e: any) {
       console.warn('[Ingest] Sam parent hydrate failed:', e?.message || e);
@@ -448,8 +499,18 @@ export async function runIngestion({
 
   const classified: ClassifiedMention[] = [];
   let companyCounts = { Likewize: 0, Asurion: 0, Allstate: 0, SquareTrade: 0, Other: 0 };
+  let stoppedEarly = false;
+  let classifiedAttempted = 0;
 
   for (const raw of filteredRaw) {
+    if (pastDeadline(10_000)) {
+      stoppedEarly = true;
+      console.warn(
+        `[Ingest] Time budget nearly exhausted after ${classifiedAttempted}/${filteredRaw.length} items — finishing early`,
+      );
+      break;
+    }
+    classifiedAttempted++;
     const haystack = `${raw.text || ''} ${(raw as any).full_thread || ''} ${(raw as any).title || ''}`;
     const preCompany =
       raw.company === 'Asurion' || mentionsAsurion(haystack)
@@ -624,19 +685,32 @@ export async function runIngestion({
     bbb_asurion: bbbAsurionRaw.length,
   };
 
+  const elapsedSec = Math.round((Date.now() - startedAtMs) / 1000);
   console.log(
     `[Ingest] Company breakdown: Likewize=${companyCounts.Likewize}, Asurion=${companyCounts.Asurion}, ` +
       `Allstate=${companyCounts.Allstate}, SquareTrade=${companyCounts.SquareTrade}, Other=${companyCounts.Other}. ` +
-      `Total kept: ${classified.length} (Reddit + PC + BBB=${bbbRaw.length}).`,
+      `Total kept: ${classified.length} (Reddit + PC + BBB=${bbbRaw.length}). ` +
+      `Elapsed ${elapsedSec}s` +
+      (stoppedEarly ? ` · stopped early (${classifiedAttempted}/${filteredRaw.length} processed)` : '') +
+      '.',
   );
+
+  const baseMsg = supabaseAdmin
+    ? `Ingested and saved ${classified.length} mentions from Reddit + PissedConsumer + BBB`
+    : `Ingested ${classified.length} mentions (no Supabase)`;
+  const message = stoppedEarly
+    ? `${baseMsg} (partial — hit ${Math.round((maxRuntimeMs || 0) / 1000)}s time budget after ${classifiedAttempted}/${filteredRaw.length}).`
+    : `${baseMsg}.`;
 
   return {
     success: true,
     count: classified.length,
     mentions: classified,
     sources,
-    message: supabaseAdmin
-      ? `Ingested and saved ${classified.length} mentions from Reddit + PissedConsumer + BBB.`
-      : 'Ingested (no Supabase).',
+    message,
+    partial: stoppedEarly,
+    elapsedMs: Date.now() - startedAtMs,
+    processed: classifiedAttempted,
+    candidates: filteredRaw.length,
   };
 }
