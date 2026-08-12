@@ -85,6 +85,33 @@ curl http://localhost:3000/api/cron/ingest
 curl "http://localhost:3000/api/cron/ingest?secret=your-secret-value"
 ```
 
+### Job run logs (admin)
+
+Each cron / manual sync writes a row to Supabase `job_runs` (migration `004_job_runs.sql`).
+
+Open the dashboard with `?admin=1` to see **last run time**, status, duration, and a recent history table for:
+
+- Daily ingest (`/api/cron/ingest` — 08:00 UTC)
+- Alert digests (`/api/notifications/run` — 09:00 UTC)
+- Manual Sync button
+
+### Troubleshooting cron not running
+
+1. **Deployment Protection (common failure)**  
+   Vercel Cron hits the **deployment host** (`*.vercel.app` deployment URL). If **Vercel Authentication** is set to protect all non-custom domains, that host returns **302 → SSO login**. Cron **does not follow redirects**, so the job never runs.  
+   **Fix:** Project Settings → Deployment Protection → Vercel Authentication → **Only Preview Deployments**.
+
+2. **CRON_SECRET**  
+   Set `CRON_SECRET` in Vercel Production env. Vercel sends `Authorization: Bearer <CRON_SECRET>` automatically. Avoid quotes/newlines in the value. Redeploy after changing.
+
+3. **Duration**  
+   Ingest is heavy; routes use `maxDuration = 300`. Check Runtime Logs if invocations end early.
+
+4. **Health probe** (after deploy):
+   ```bash
+   curl -H "Authorization: Bearer $CRON_SECRET" https://your-app.vercel.app/api/cron/health
+   ```
+
 Check the terminal logs for `[Ingest]`, company breakdown, and Supabase upsert activity.
 
 The manual "Update Market Data" button in the UI is still useful for on-demand or full refreshes.

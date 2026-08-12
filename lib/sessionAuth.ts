@@ -1,17 +1,12 @@
 /**
- * Simple shared-credential session for Market Vantage.
- * Username/password from env (defaults: Likewize / Likewize2026!).
+ * Signed session cookies for Market Vantage.
+ * Subject is a verified @likewize.com email after OTP sign-in.
  */
+
+import { isLikewizeEmail } from '@/lib/likewizeEmail';
 
 export const SESSION_COOKIE = 'mv_session';
 const SESSION_DAYS = 14;
-
-export function dashboardCredentials() {
-  return {
-    username: process.env.DASHBOARD_USERNAME || 'Likewize',
-    password: process.env.DASHBOARD_PASSWORD || 'Likewize2026!',
-  };
-}
 
 function authSecret(): string {
   return (
@@ -25,7 +20,6 @@ function toBase64Url(bytes: ArrayBuffer | Uint8Array): string {
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let s = '';
   for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]!);
-  // btoa available in edge + node
   const b64 = btoa(s);
   return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
@@ -50,17 +44,15 @@ async function importHmacKey(): Promise<CryptoKey> {
   );
 }
 
-/** Create a signed session token (username + expiry). */
-export async function createSessionToken(username: string): Promise<string> {
-  const exp = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
-  const payload = `${username}|${exp}`;
+/** Sign an arbitrary payload string → base64url.payload.sig */
+export async function createSignedPayload(payload: string): Promise<string> {
   const key = await importHmacKey();
   const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
   return `${toBase64Url(new TextEncoder().encode(payload))}.${toBase64Url(sig)}`;
 }
 
-/** Verify cookie value; returns username or null. */
-export async function verifySessionToken(token?: string | null): Promise<string | null> {
+/** Verify signature and return payload string, or null. Does not interpret contents. */
+export async function verifySignedPayload(token?: string | null): Promise<string | null> {
   if (!token || !token.includes('.')) return null;
   const [payloadB64, sigB64] = token.split('.');
   if (!payloadB64 || !sigB64) return null;
@@ -76,15 +68,30 @@ export async function verifySessionToken(token?: string | null): Promise<string 
       payloadBytes as BufferSource,
     );
     if (!ok) return null;
+    return new TextDecoder().decode(payloadBytes);
+  } catch {
+    return null;
+  }
+}
 
-    const payload = new TextDecoder().decode(payloadBytes);
-    const [username, expStr] = payload.split('|');
+/** Create a signed session token (email + expiry). */
+export async function createSessionToken(email: string): Promise<string> {
+  const exp = Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000;
+  const payload = `${email}|${exp}`;
+  return createSignedPayload(payload);
+}
+
+/** Verify cookie value; returns email or null. */
+export async function verifySessionToken(token?: string | null): Promise<string | null> {
+  const payload = await verifySignedPayload(token);
+  if (!payload) return null;
+
+  try {
+    const [email, expStr] = payload.split('|');
     const exp = Number(expStr);
-    if (!username || !Number.isFinite(exp) || Date.now() > exp) return null;
-
-    const { username: expected } = dashboardCredentials();
-    if (username !== expected) return null;
-    return username;
+    if (!email || !Number.isFinite(exp) || Date.now() > exp) return null;
+    if (!isLikewizeEmail(email)) return null;
+    return email.trim().toLowerCase();
   } catch {
     return null;
   }

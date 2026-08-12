@@ -2,7 +2,7 @@ import { Suspense } from "react";
 
 export const metadata = {
   title: "Sign in · Market Vantage",
-  description: "Sign in to Market Vantage with Likewize credentials.",
+  description: "Sign in to Market Vantage with your @likewize.com email.",
 };
 
 /** Suspense boundary required for useSearchParams on the login form. */

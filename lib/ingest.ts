@@ -325,29 +325,52 @@ export async function repairMislabeledSources(opts: { skipBackfill?: boolean } =
   }
 }
 
-export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'update' } = {}) {
+export async function runIngestion({
+  mode = 'update',
+  /**
+   * When set (daily cron), only classify + upsert mentions whose created_at
+   * falls within this lookback (e.g. 24). Full/manual sync omit this.
+   */
+  sinceHours,
+}: {
+  mode?: 'full' | 'update';
+  sinceHours?: number;
+} = {}) {
   const isFull = mode === 'full';
+  const recentWindow =
+    typeof sinceHours === 'number' && sinceHours > 0 ? sinceHours : null;
+  const redditTime =
+    recentWindow != null && recentWindow <= 24
+      ? 'day'
+      : recentWindow != null && recentWindow <= 168
+        ? 'week'
+        : 'all';
 
-  await repairMislabeledSources();
+  // Heavy Sam backfill is for full/manual runs; daily cron stays light.
+  await repairMislabeledSources({ skipBackfill: !!recentWindow });
 
-  // Sources: Reddit + PissedConsumer + Likewize BBB (all ~70 review pages).
-  // Higher limit so unrestricted Asurion Reddit volume is not truncated.
-  const fetchLimit = isFull ? 700 : 450;
+  // Sources: Reddit + PissedConsumer + Likewize BBB + Asurion BBB.
+  // Cron (sinceHours) uses smaller caps; full/manual stays wide.
+  const fetchLimit = isFull ? 700 : recentWindow ? 220 : 450;
+  const bbbLikewizePages = isFull ? 80 : recentWindow ? 8 : 80;
+  const bbbAsurionPages = isFull ? 1000 : recentWindow ? 15 : 1000;
+
   console.log(
-    `[Ingest] Starting ingestion (${isFull ? 'full' : 'update'}). Sources: Reddit + PissedConsumer + Likewize BBB + Asurion BBB.`,
+    `[Ingest] Starting ingestion (${isFull ? 'full' : 'update'}` +
+      `${recentWindow ? `, last ${recentWindow}h only` : ''}). ` +
+      `Sources: Reddit (time=${redditTime}) + PissedConsumer + BBB.`,
   );
 
-  const redditRaw = await fetchDeviceProtectionMentions(fetchLimit);
+  const redditRaw = await fetchDeviceProtectionMentions(fetchLimit, { time: redditTime });
   const pcRaw = await scrapePissedConsumer();
-  // Full BBB pagination (cloudscraper; Asurion can be large — many pages)
-  const bbbLikewizeRaw = await scrapeLikewizeBBB(80);
-  const bbbAsurionRaw = await scrapeAsurionBBB(isFull ? 1000 : 1000);
+  const bbbLikewizeRaw = await scrapeLikewizeBBB(bbbLikewizePages);
+  const bbbAsurionRaw = await scrapeAsurionBBB(bbbAsurionPages);
   const bbbRaw = [...bbbLikewizeRaw, ...bbbAsurionRaw];
 
   // Index u/Asurion_Sam comments → merge into Asurion mentions for official-reply metrics
   let samIndex: SamIndex = new Map();
   try {
-    samIndex = await fetchAsurionSamReplyIndex(1000);
+    samIndex = await fetchAsurionSamReplyIndex(recentWindow ? 150 : 1000);
   } catch (e: any) {
     console.warn('[Ingest] Could not load Asurion_Sam history:', e?.message || e);
   }
@@ -357,7 +380,11 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
   if (samIndex.size) {
     const existingIds = new Set(redditRaw.map((r) => r.id));
     try {
-      samParents = await hydrateAsurionSamParentThreads(samIndex, existingIds, 100);
+      samParents = await hydrateAsurionSamParentThreads(
+        samIndex,
+        existingIds,
+        recentWindow ? 25 : 100,
+      );
     } catch (e: any) {
       console.warn('[Ingest] Sam parent hydrate failed:', e?.message || e);
     }
@@ -382,7 +409,7 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
   }
 
   // Filter: PissedConsumer + BBB always kept; Asurion always kept; others need device protection.
-  const filteredRaw = allRaw.filter((raw: any) => {
+  let filteredRaw = allRaw.filter((raw: any) => {
     const source = (raw.source || '').toLowerCase();
     if (source.includes('pissedconsumer') || source.includes('pissed')) return true;
     if (source.includes('bbb') || String(raw.id || '').startsWith('bbb-')) return true;
@@ -395,9 +422,28 @@ export async function runIngestion({ mode = 'update' }: { mode?: 'full' | 'updat
     return ok;
   });
 
+  // Daily cron: only last N hours (by source post date)
+  if (recentWindow != null) {
+    const cutoffMs = Date.now() - recentWindow * 60 * 60 * 1000;
+    const beforeAge = filteredRaw.length;
+    filteredRaw = filteredRaw.filter((raw: any) => {
+      const ts = new Date(raw.created_at || 0).getTime();
+      if (!ts || Number.isNaN(ts)) {
+        console.log(`[Ingest] EXCLUDED undated item in ${recentWindow}h window: ${raw.id}`);
+        return false;
+      }
+      return ts >= cutoffMs;
+    });
+    console.log(
+      `[Ingest] Last ${recentWindow}h date filter: ${filteredRaw.length} / ${beforeAge} kept ` +
+        `(cutoff ${new Date(cutoffMs).toISOString()}).`,
+    );
+  }
+
   console.log(
     `[Ingest] ${filteredRaw.length} / ${allRaw.length} items kept ` +
-      `(PC + BBB + Asurion unrestricted + device protection). Classifying...`,
+      `(PC + BBB + Asurion unrestricted + device protection` +
+      `${recentWindow ? ` + last ${recentWindow}h` : ''}). Classifying...`,
   );
 
   const classified: ClassifiedMention[] = [];

@@ -274,9 +274,14 @@ export async function processAlertDigests(opts?: {
     };
   }
 
-  // Load recent mentions (default lookback 48h, or since earliest last_notified)
-  const sinceHours = opts?.sinceHours ?? 48;
+  // Load recent mentions for the lookback window (cron uses 24h).
+  // Per-subscriber, we still respect last_notified_at so we only email *new* matches.
+  const sinceHours = opts?.sinceHours ?? 24;
   const defaultSince = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString();
+
+  console.log(
+    `[alerts] Loading mentions since ${defaultSince} (sinceHours=${sinceHours}, force=${!!opts?.force}, subscribers=${list.length})`,
+  );
 
   const { data: rows, error: mentErr } = await supabaseAdmin
     .from('mentions')

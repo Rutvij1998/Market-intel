@@ -175,16 +175,26 @@ function shouldKeepRedditMention(text: string): boolean {
   return isElectronicDeviceProtection(text);
 }
 
-export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMention[]> {
+export type RedditTimeFilter = 'hour' | 'day' | 'week' | 'month' | 'year' | 'all';
+
+export async function fetchDeviceProtectionMentions(
+  limit = 250,
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
   const client = await getRedditClient();
   if (!client) {
     console.log('[Reddit] No client (missing creds) — returning 0. Put full Reddit script creds in .env.local');
     return [];
   }
 
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+
   const results: RawMention[] = [];
   try {
-    console.log(`[Reddit] Starting collection: Likewize/Allstate/SquareTrade = electronic device protection; Asurion = ALL Reddit mentions (no device filter).`);
+    console.log(
+      `[Reddit] Starting collection (time=${timeFilter}): Likewize/Allstate/SquareTrade = electronic device protection; Asurion = ALL Reddit mentions (no device filter).`,
+    );
 
     // ---------------------------------------------------------------
     // 0. ASURION — unrestricted. Pull all Reddit posts mentioning Asurion
@@ -203,25 +213,27 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
       await waitForRateLimitIfNeeded(client, 1100);
       try {
         console.log(`[Reddit] [ASURION-ALL] query: ${q}`);
-        let listing = await client.search({ query: q, sort: 'new', time: 'all', limit: 100 });
+        let listing = await client.search({ query: q, sort: 'new', time: timeFilter, limit: isRecentOnly ? 50 : 100 });
         let combined: any[] = [...listing];
         await waitForRateLimitIfNeeded(client, 700);
-        try {
-          listing = await listing.fetchMore({ amount: 100 });
-          if (listing?.length) combined = combined.concat(listing);
-        } catch {}
-        // Also pull top posts for breadth (not only newest)
-        try {
-          await waitForRateLimitIfNeeded(client, 700);
-          const topListing = await client.search({ query: q, sort: 'relevance', time: 'all', limit: 50 });
-          if (topListing?.length) combined = combined.concat(topListing);
-        } catch {}
+        if (!isRecentOnly) {
+          try {
+            listing = await listing.fetchMore({ amount: 100 });
+            if (listing?.length) combined = combined.concat(listing);
+          } catch {}
+          // Also pull top posts for breadth (not only newest)
+          try {
+            await waitForRateLimitIfNeeded(client, 700);
+            const topListing = await client.search({ query: q, sort: 'relevance', time: timeFilter, limit: 50 });
+            if (topListing?.length) combined = combined.concat(topListing);
+          } catch {}
+        }
 
-        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, 180);
+        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, isRecentOnly ? 60 : 180);
         console.log(`[Reddit] [ASURION-ALL] ${q.substring(0, 50)}... : ${uniqueCombined.length} raw posts`);
 
         let fullCount = 0;
-        const MAX_FULL = 80;
+        const MAX_FULL = isRecentOnly ? 25 : 80;
         for (const post of uniqueCombined) {
           const textForCheck = haystackFromPost(post);
           // Must actually mention Asurion (skip noise from relevance search)
@@ -252,20 +264,27 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
       await waitForRateLimitIfNeeded(client, 1000);
       try {
         console.log(`[Reddit] [ASURION-ALL] sub r/${sub} search: asurion`);
-        let listing = await client.getSubreddit(sub).search({ query: 'asurion', sort: 'new', time: 'all', limit: 75 });
+        let listing = await client.getSubreddit(sub).search({
+          query: 'asurion',
+          sort: 'new',
+          time: timeFilter,
+          limit: isRecentOnly ? 40 : 75,
+        });
         let combined: any[] = [...listing];
         await waitForRateLimitIfNeeded(client, 500);
-        try {
-          listing = await listing.fetchMore({ amount: 50 });
-          if (listing?.length) combined = combined.concat(listing);
-        } catch {}
-        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, 100);
+        if (!isRecentOnly) {
+          try {
+            listing = await listing.fetchMore({ amount: 50 });
+            if (listing?.length) combined = combined.concat(listing);
+          } catch {}
+        }
+        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, isRecentOnly ? 40 : 100);
         const clientName = detectClientFromSubreddit(sub);
         let fullCount = 0;
         for (const post of uniqueCombined) {
           const textForCheck = haystackFromPost(post);
           if (!mentionsAsurion(textForCheck)) continue;
-          const doFull = fullCount < 25;
+          const doFull = fullCount < (isRecentOnly ? 10 : 25);
           await processSubmission(client, post, results, clientName, doFull);
           if (doFull) {
             fullCount++;
@@ -297,18 +316,20 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
       await waitForRateLimitIfNeeded(client, 1100);
       try {
         console.log(`[Reddit] [GLOBAL] query: ${q}`);
-        let listing = await client.search({ query: q, sort: 'new', time: 'all', limit: 70 });
+        let listing = await client.search({ query: q, sort: 'new', time: timeFilter, limit: isRecentOnly ? 40 : 70 });
         let combined: any[] = [...listing];
         await waitForRateLimitIfNeeded(client, 700);
-        try {
-          listing = await listing.fetchMore({ amount: 45 });
-          if (listing?.length) combined = combined.concat(listing);
-        } catch {}
-        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, 90);
+        if (!isRecentOnly) {
+          try {
+            listing = await listing.fetchMore({ amount: 45 });
+            if (listing?.length) combined = combined.concat(listing);
+          } catch {}
+        }
+        const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, isRecentOnly ? 45 : 90);
         console.log(`[Reddit] [GLOBAL] ${q.substring(0,40)}... : ${uniqueCombined.length} raw`);
 
         let fullCount = 0;
-        const MAX_FULL = 50;
+        const MAX_FULL = isRecentOnly ? 20 : 50;
         for (const post of uniqueCombined) {
           const textForCheck = haystackFromPost(post);
           // Asurion always kept; others need device-protection relevance
@@ -337,18 +358,25 @@ export async function fetchDeviceProtectionMentions(limit = 250): Promise<RawMen
       try {
         for (const sq of [broadSubQuery, protectionSubQuery]) {
           console.log(`[Reddit] [SUB r/${sub}] broad: ${sq.substring(0, 70)}...`);
-          let listing = await client.getSubreddit(sub).search({ query: sq, sort: 'new', time: 'all', limit: 60 });
+          let listing = await client.getSubreddit(sub).search({
+            query: sq,
+            sort: 'new',
+            time: timeFilter,
+            limit: isRecentOnly ? 30 : 60,
+          });
           let combined: any[] = [...listing];
           await waitForRateLimitIfNeeded(client, 600);
-          try {
-            listing = await listing.fetchMore({ amount: 40 });
-            if (listing?.length) combined = combined.concat(listing);
-          } catch {}
-          const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, 80);
+          if (!isRecentOnly) {
+            try {
+              listing = await listing.fetchMore({ amount: 40 });
+              if (listing?.length) combined = combined.concat(listing);
+            } catch {}
+          }
+          const uniqueCombined = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(0, isRecentOnly ? 40 : 80);
 
           const clientName = detectClientFromSubreddit(sub);
           let fullCount = 0;
-          const MAX_FULL_PER = 30;
+          const MAX_FULL_PER = isRecentOnly ? 12 : 30;
 
           for (const post of uniqueCombined) {
             const textForCheck = haystackFromPost(post);
@@ -731,3 +759,145 @@ export async function refreshRedditThreadComments(redditPostId: string): Promise
 
 // No demo/synthetic data. Only real Reddit results (or empty).
 // All data comes from real snoowrap searches + getNew scans with full thread expansion for client context (e.g. Newegg).
+
+/**
+ * Extract a Reddit submission id (e.g. "1abcxyz") from a mention id or URL.
+ */
+export function extractRedditSubmissionId(opts: {
+  id?: string | null;
+  url?: string | null;
+}): string | null {
+  const tryId = (raw?: string | null): string | null => {
+    if (!raw) return null;
+    let s = String(raw).trim();
+    // skip UUIDs (Supabase row ids)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) return null;
+    s = s.replace(/^t3_/, '').replace(/^reddit-/, '');
+    // bare base36 reddit ids
+    if (/^[a-z0-9]{5,10}$/i.test(s)) return s.toLowerCase();
+    return null;
+  };
+
+  const fromId = tryId(opts.id);
+  if (fromId) return fromId;
+
+  const url = String(opts.url || '').trim();
+  if (!url) return null;
+
+  const patterns = [
+    /reddit\.com\/(?:r\/[^/]+\/)?comments\/([a-z0-9]+)/i,
+    /reddit\.com\/comments\/([a-z0-9]+)/i,
+    /redd\.it\/([a-z0-9]+)/i,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m?.[1]) return m[1].toLowerCase();
+  }
+  return null;
+}
+
+export type PostRedditReplyResult =
+  | {
+      ok: true;
+      submissionId: string;
+      commentId: string;
+      permalink: string;
+      username: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+/**
+ * Post a top-level comment on a Reddit submission as the configured script user.
+ */
+export async function postRedditReply(opts: {
+  submissionId: string;
+  body: string;
+}): Promise<PostRedditReplyResult> {
+  const body = String(opts.body || '').trim();
+  if (!body) return { ok: false, error: 'Reply text is empty' };
+  if (body.length > 10000) return { ok: false, error: 'Reply is too long for Reddit (max ~10k chars)' };
+
+  const submissionId = String(opts.submissionId || '')
+    .replace(/^t3_/, '')
+    .replace(/^reddit-/, '')
+    .trim();
+  if (!submissionId) return { ok: false, error: 'Missing Reddit post id' };
+
+  const client = await getRedditClient();
+  if (!client) {
+    return {
+      ok: false,
+      error:
+        'Reddit credentials not configured (REDDIT_CLIENT_ID / SECRET / USERNAME / PASSWORD). Cannot post.',
+    };
+  }
+
+  try {
+    await waitForRateLimitIfNeeded(client, 800);
+    let meName = process.env.REDDIT_USERNAME || 'unknown';
+    try {
+      const me = await client.getMe();
+      if (me?.name) meName = me.name;
+    } catch {
+      /* use env username */
+    }
+
+    const submission = client.getSubmission(submissionId);
+    // Snoowrap reply returns a Comment thenable
+    const comment: any = await (submission as any).reply(body);
+    let commentId = String(comment?.id || comment?.name || '').replace(/^t1_/, '');
+    let permalinkPath = comment?.permalink ? String(comment.permalink) : '';
+
+    try {
+      if (comment?.fetch) {
+        const full = await comment.fetch();
+        if (full?.id) commentId = String(full.id).replace(/^t1_/, '');
+        if (full?.permalink) permalinkPath = String(full.permalink);
+      }
+    } catch {
+      /* optional enrich */
+    }
+
+    if (!commentId) {
+      return { ok: false, error: 'Reddit accepted the request but no comment id was returned' };
+    }
+
+    const permalink = permalinkPath
+      ? permalinkPath.startsWith('http')
+        ? permalinkPath
+        : `https://www.reddit.com${permalinkPath}`
+      : `https://www.reddit.com/comments/${submissionId}/_/${commentId}/`;
+
+    console.log(`[Reddit] Posted comment ${commentId} as u/${meName} on ${submissionId}`);
+    return {
+      ok: true,
+      submissionId,
+      commentId,
+      permalink,
+      username: meName,
+    };
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    console.error('[Reddit] post reply failed:', msg);
+    // Common Reddit errors
+    if (/THREAD_LOCKED|locked/i.test(msg)) {
+      return { ok: false, error: 'This thread is locked — Reddit will not accept new comments.' };
+    }
+    if (/ARCHIVED|archived/i.test(msg)) {
+      return { ok: false, error: 'This post is archived — comments are closed.' };
+    }
+    if (/RATELIMIT|rate limit/i.test(msg)) {
+      return { ok: false, error: 'Reddit rate limit — wait a few minutes and try again.' };
+    }
+    if (/403|USER_REQUIRED|401|Invalid grant/i.test(msg)) {
+      return {
+        ok: false,
+        error: 'Reddit auth failed. Check REDDIT_USERNAME/PASSWORD and that the app is type "script".',
+      };
+    }
+    return { ok: false, error: msg.slice(0, 240) };
+  }
+}

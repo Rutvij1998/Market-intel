@@ -9,5 +9,16 @@
       "path": "/api/notifications/run",
       "schedule": "0 9 * * *"
     }
-  ]
+  ],
+  "functions": {
+    "app/api/cron/ingest/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/notifications/run/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/ingest/all/route.ts": {
+      "maxDuration": 300
+    }
+  }
 }

@@ -10,7 +10,13 @@
  *   and capture the full page for PNG + multi-page PDF
  */
 
-import { dashboardCredentials } from '@/lib/sessionAuth';
+import { createSessionToken, SESSION_COOKIE } from '@/lib/sessionAuth';
+
+/** Synthetic @likewize.com subject for headless screenshot sessions. */
+function serviceSessionEmail(): string {
+  const raw = (process.env.DASHBOARD_SERVICE_EMAIL || 'alerts@likewize.com').trim().toLowerCase();
+  return raw.endsWith('@likewize.com') ? raw : 'alerts@likewize.com';
+}
 
 export interface ScreenshotSub {
   all_clients: boolean;
@@ -148,36 +154,10 @@ function shotFromPng(buffer: Buffer, filename: string, label: string): Dashboard
   };
 }
 
-async function loginCookies(base: string): Promise<{ name: string; value: string }[]> {
-  const { username, password } = dashboardCredentials();
-  const nodeLogin = await fetch(`${base}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
-  if (!nodeLogin.ok) {
-    const body = await nodeLogin.text().catch(() => '');
-    throw new Error(`Screenshot login failed HTTP ${nodeLogin.status}: ${body.slice(0, 200)}`);
-  }
-  const setCookie = nodeLogin.headers.getSetCookie?.() || [];
-  const cookieHeader = nodeLogin.headers.get('set-cookie');
-  const rawCookies =
-    setCookie.length > 0
-      ? setCookie
-      : cookieHeader
-        ? cookieHeader.split(/,(?=\s*[^;]+=)/)
-        : [];
-
-  const out: { name: string; value: string }[] = [];
-  for (const raw of rawCookies) {
-    const [pair] = raw.split(';');
-    const eq = pair?.indexOf('=') ?? -1;
-    if (eq < 0) continue;
-    const name = pair!.slice(0, eq).trim();
-    const value = pair!.slice(eq + 1).trim();
-    if (name) out.push({ name, value });
-  }
-  return out;
+/** Mint a valid session cookie without going through the OTP UI (server-side only). */
+async function loginCookies(_base: string): Promise<{ name: string; value: string }[]> {
+  const token = await createSessionToken(serviceSessionEmail());
+  return [{ name: SESSION_COOKIE, value: token }];
 }
 
 async function pageLooksEmpty(getText: () => Promise<string>): Promise<boolean> {
@@ -442,16 +422,19 @@ async function captureWithPlaywright(
     });
     const page = await context.newPage();
     const base = appBaseUrl();
-    const { username, password } = dashboardCredentials();
-
-    const loginRes = await page.request.post(`${base}/api/auth/login`, {
-      data: { username, password },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!loginRes.ok()) {
-      const body = await loginRes.text().catch(() => '');
-      throw new Error(`Screenshot login failed HTTP ${loginRes.status()}: ${body.slice(0, 200)}`);
-    }
+    const sessionToken = await createSessionToken(serviceSessionEmail());
+    const host = new URL(base).hostname;
+    await context.addCookies([
+      {
+        name: SESSION_COOKIE,
+        value: sessionToken,
+        domain: host === 'localhost' ? 'localhost' : host,
+        path: '/',
+        httpOnly: true,
+        secure: host !== 'localhost',
+        sameSite: 'Lax',
+      },
+    ]);
 
     let chosen: Target | null = null;
     for (const t of targets) {

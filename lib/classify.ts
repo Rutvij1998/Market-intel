@@ -32,6 +32,8 @@ export interface ClassifiedMention {
   client?: string;   // retailer the plan was bought through (Newegg, Rogers, etc.)
   subreddit?: string;
   title?: string;
+  /** Original post author when known (e.g. Reddit username) */
+  author?: string | null;
   rating?: number | null;
   // Competitor analysis fields
   company?: 'Likewize' | 'Asurion' | 'Allstate' | 'SquareTrade' | 'Other';

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Star, RefreshCw, Download, LayoutDashboard, Users, Activity, Bell } from "lucide-react";
+import { Star, RefreshCw, Download, LayoutDashboard, Users, Activity, Bell, Clock, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,58 @@ import {
   BUSINESS_LINE_LABELS,
   type BusinessLine,
 } from "@/lib/utils";
+
+/** Client-safe shape for admin job-run panel (API response). */
+type JobRunRow = {
+  id: string;
+  job_name: string;
+  trigger: string;
+  status: string;
+  started_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  message?: string | null;
+  error?: string | null;
+  details?: Record<string, unknown> | null;
+};
+
+function jobRunLabel(jobName: string): string {
+  switch (jobName) {
+    case 'cron_ingest':
+      return 'Daily ingest (cron)';
+    case 'notifications':
+      return 'Alert digests';
+    case 'manual_ingest':
+      return 'Manual sync';
+    default:
+      return jobName;
+  }
+}
+
+function formatDurationMs(ms?: number | null): string {
+  if (ms == null || ms < 0) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  return rem ? `${min}m ${rem}s` : `${min}m`;
+}
+
+function formatJobWhen(iso?: string | null): string {
+  if (!iso) return 'Never';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'Unknown';
+  const relative = formatMentionTimeAgo(iso);
+  const absolute = d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+  return `${relative} · ${absolute}`;
+}
 import { detectOfficialSupportReply, isRedditMention } from "@/lib/officialSupport";
 import {
   getInsightHighlightReasons,
@@ -31,6 +83,7 @@ import {
   type HighlightReason,
 } from "@/lib/highlightReasons";
 import { ThreadFeedback } from "@/components/ThreadFeedback";
+import { DraftReply } from "@/components/DraftReply";
 import { UserMenu } from "@/components/UserMenu";
 import { DashboardSearch, mentionMatchesSource } from "@/components/DashboardSearch";
 import { AlertEnrollment } from "@/components/AlertEnrollment";
@@ -248,6 +301,21 @@ export default function MarketIntelDashboard() {
   const [themeDrill, setThemeDrill] = useState<AggregatedTheme | null>(null);
   /** Email alert enrollment modal */
   const [alertEnrollOpen, setAlertEnrollOpen] = useState(false);
+  /** Admin tools (Sync) — enable via ?admin=1. Regular users rely on cron + Refresh. */
+  const [isAdminView, setIsAdminView] = useState(false);
+  /** Admin: recent cron / ingest job run logs */
+  const [jobRuns, setJobRuns] = useState<JobRunRow[]>([]);
+  const [jobRunsLastByJob, setJobRunsLastByJob] = useState<Record<string, JobRunRow>>({});
+  const [jobRunsLoading, setJobRunsLoading] = useState(false);
+  const [jobRunsError, setJobRunsError] = useState<string | null>(null);
+  const [jobRunsMigrationRequired, setJobRunsMigrationRequired] = useState(false);
+  const [jobRunsSchedule, setJobRunsSchedule] = useState<Record<string, string> | null>(null);
+  const [jobRunsDiagnostics, setJobRunsDiagnostics] = useState<{
+    cronSecretConfigured?: boolean;
+    onVercel?: boolean;
+    vercelEnv?: string | null;
+    notes?: string[];
+  } | null>(null);
 
   // Keep Recent Insights rail the exact same height as the main dashboard column (desktop)
   const dashboardColRef = useRef<HTMLDivElement>(null);
@@ -371,6 +439,7 @@ export default function MarketIntelDashboard() {
           client: clientLabel,
           subreddit: row.subreddit || raw.subreddit,
           title: row.title,
+          author: row.author || raw.author || raw.original?.author || null,
           rating: raw.rating ?? row.rating,
           company,
           product_type: productType,
@@ -438,8 +507,35 @@ export default function MarketIntelDashboard() {
     }
   }
 
+  async function loadJobRuns() {
+    setJobRunsLoading(true);
+    setJobRunsError(null);
+    try {
+      const res = await fetch('/api/admin/job-runs?limit=15', { credentials: 'include' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        setJobRuns([]);
+        setJobRunsLastByJob({});
+        setJobRunsMigrationRequired(!!json.migrationRequired);
+        setJobRunsError(json.error || `Failed to load job runs (${res.status})`);
+        return;
+      }
+      setJobRuns(Array.isArray(json.runs) ? json.runs : []);
+      setJobRunsLastByJob(json.lastByJob && typeof json.lastByJob === 'object' ? json.lastByJob : {});
+      setJobRunsSchedule(json.schedule && typeof json.schedule === 'object' ? json.schedule : null);
+      setJobRunsDiagnostics(json.diagnostics && typeof json.diagnostics === 'object' ? json.diagnostics : null);
+      setJobRunsMigrationRequired(false);
+    } catch (e: unknown) {
+      setJobRunsError(e instanceof Error ? e.message : 'Failed to load job runs');
+      setJobRuns([]);
+      setJobRunsLastByJob({});
+    } finally {
+      setJobRunsLoading(false);
+    }
+  }
+
   // Deep-link filters for alert screenshots / shared URLs:
-  // ?client=&line=&source=&tab=&range=&screenshot=1&exact=1
+  // ?client=&line=&source=&tab=&range=&screenshot=1&exact=1&admin=1
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -451,6 +547,8 @@ export default function MarketIntelDashboard() {
     const screenshotMode = params.get('screenshot') === '1';
     // exact=1 → honor filters as sent (user snapshot); otherwise auto-alert defaults
     const exactMode = params.get('exact') === '1';
+    // admin=1 → show Sync (manual ingest). Default UI is read-only + Refresh from DB.
+    setIsAdminView(params.get('admin') === '1');
 
     if (client) setActiveClient(client);
     if (source) setActiveSource(source);
@@ -474,6 +572,12 @@ export default function MarketIntelDashboard() {
       setActiveRange(range);
     }
   }, []);
+
+  // Admin panel: load cron / job run history when ?admin=1
+  useEffect(() => {
+    if (!isAdminView) return;
+    void loadJobRuns();
+  }, [isAdminView]);
 
   // Always load existing data from Supabase immediately on mount/refresh (device protection only).
   // Overview tab focuses on Likewize; Competitor tab compares Asurion + SquareTrade.
@@ -1152,6 +1256,11 @@ export default function MarketIntelDashboard() {
         if (!isAuto) {
           toast.success('Sync started in background', { description: 'Data is being fetched and saved. Click "Refresh" when ready to load the latest results.' });
         }
+        // Pull job log shortly after start (running row) and again when likely finished
+        if (isAdminView) {
+          setTimeout(() => void loadJobRuns(), 1500);
+          setTimeout(() => void loadJobRuns(), 60_000);
+        }
       })
       .catch((e: any) => {
         if (!isAuto) toast.error('Sync failed to start (check console + .env)');
@@ -1435,7 +1544,7 @@ export default function MarketIntelDashboard() {
 
           <div className="flex-1 min-w-0" />
 
-          {/* Keep Sync + Refresh + Alerts on one line */}
+          {/* Alerts + Refresh always; Sync only in admin view (?admin=1) */}
           <div className="flex items-center gap-2 shrink-0">
             <Button
               type="button"
@@ -1448,16 +1557,18 @@ export default function MarketIntelDashboard() {
               <Bell className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Alerts</span>
             </Button>
-            <Button
-              onClick={() => handleIngestAll(false)}
-              disabled={isIngesting}
-              className="button-primary text-white gap-1.5 text-xs lg:text-sm"
-              size="sm"
-              title="Fetch new data from Reddit + PissedConsumer into the database"
-            >
-              {isIngesting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {isIngesting ? "Syncing..." : "Sync"}
-            </Button>
+            {isAdminView && (
+              <Button
+                onClick={() => handleIngestAll(false)}
+                disabled={isIngesting}
+                className="button-primary text-white gap-1.5 text-xs lg:text-sm"
+                size="sm"
+                title="Fetch new data from Reddit + PissedConsumer into the database"
+              >
+                {isIngesting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                {isIngesting ? "Syncing..." : "Sync"}
+              </Button>
+            )}
 
             <Button
               onClick={refreshFromDatabase}
@@ -1480,6 +1591,191 @@ export default function MarketIntelDashboard() {
               {activeTab === 'overview' ? 'Overview' : 'Competitor Analysis'}
             </h1>
           </div>
+
+          {/* Admin: last cron / background job runs */}
+          {isAdminView && (
+            <div className="mv-card border border-[var(--border)] rounded-xl p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-[var(--primary)] shrink-0" />
+                    <h2 className="text-sm font-semibold text-[var(--foreground)]">
+                      Background job logs
+                    </h2>
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--primary)]/10 text-[var(--primary)]">
+                      Admin
+                    </span>
+                  </div>
+                  <p className="text-xs text-[var(--muted-foreground)] mt-1">
+                    Last runs for daily ingest (08:00 UTC, last 24h data) and alert digests (09:00 UTC). Refresh closes abandoned &quot;running&quot; jobs that timed out.
+                  </p>
+                  {jobRunsDiagnostics && (
+                    <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+                      <span>
+                        CRON_SECRET:{' '}
+                        <strong className="text-[var(--foreground)]">
+                          {jobRunsDiagnostics.cronSecretConfigured ? 'configured' : 'not set'}
+                        </strong>
+                      </span>
+                      <span>
+                        Env:{' '}
+                        <strong className="text-[var(--foreground)]">
+                          {jobRunsDiagnostics.vercelEnv || (jobRunsDiagnostics.onVercel ? 'vercel' : 'local')}
+                        </strong>
+                      </span>
+                    </p>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs gap-1.5 shrink-0"
+                  onClick={() => void loadJobRuns()}
+                  disabled={jobRunsLoading}
+                >
+                  {jobRunsLoading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                  Refresh logs
+                </Button>
+              </div>
+
+              {/* Last-run summary chips */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {(['cron_ingest', 'notifications', 'manual_ingest'] as const).map((name) => {
+                  const last = jobRunsLastByJob[name];
+                  const status = last?.status || 'none';
+                  const statusColor =
+                    status === 'success'
+                      ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                      : status === 'error'
+                        ? 'text-red-700 bg-red-50 border-red-200'
+                        : status === 'running'
+                          ? 'text-amber-800 bg-amber-50 border-amber-200'
+                          : 'text-[var(--muted-foreground)] bg-[var(--muted)]/40 border-[var(--border)]';
+                  return (
+                    <div
+                      key={name}
+                      className={`rounded-lg border px-3 py-2.5 ${statusColor}`}
+                    >
+                      <div className="text-[10px] font-medium uppercase tracking-wide opacity-80">
+                        {jobRunLabel(name)}
+                      </div>
+                      <div className="text-sm font-semibold mt-0.5 truncate">
+                        {last ? formatJobWhen(last.finished_at || last.started_at) : 'Never ran'}
+                      </div>
+                      <div className="text-[11px] mt-0.5 opacity-90">
+                        {last
+                          ? `${status}${last.duration_ms != null ? ` · ${formatDurationMs(last.duration_ms)}` : ''}`
+                          : jobRunsSchedule?.[name] || '—'}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {jobRunsMigrationRequired && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 text-amber-900 text-xs p-3 flex gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-semibold">Migration required</div>
+                    <div className="mt-0.5">
+                      Run <code className="font-mono bg-amber-100 px-1 rounded">supabase/migrations/004_job_runs.sql</code> in the Supabase SQL Editor, then refresh logs. New job runs will be recorded after that.
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {jobRunsError && !jobRunsMigrationRequired && (
+                <div className="rounded-lg border border-red-200 bg-red-50 text-red-800 text-xs p-3 flex gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{jobRunsError}</span>
+                </div>
+              )}
+
+              {!jobRunsLoading && !jobRunsError && jobRuns.length === 0 && !jobRunsMigrationRequired && (
+                <div className="text-xs text-[var(--muted-foreground)] rounded-lg border border-dashed border-[var(--border)] p-3">
+                  No job runs logged yet. After the next cron fire or manual Sync, rows will show here.
+                </div>
+              )}
+
+              {jobRuns.length > 0 && (
+                <div className="overflow-x-auto -mx-1">
+                  <table className="w-full text-xs min-w-[520px]">
+                    <thead>
+                      <tr className="text-left text-[var(--muted-foreground)] border-b border-[var(--border)]">
+                        <th className="font-medium py-1.5 px-1.5">Job</th>
+                        <th className="font-medium py-1.5 px-1.5">Status</th>
+                        <th className="font-medium py-1.5 px-1.5">When</th>
+                        <th className="font-medium py-1.5 px-1.5">Duration</th>
+                        <th className="font-medium py-1.5 px-1.5">Message</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobRuns.map((run) => {
+                        const isTimedOut =
+                          run.status === 'error' &&
+                          (/timed out/i.test(String(run.message || '')) ||
+                            /timed out|stale|killed/i.test(String(run.error || '')));
+                        const statusLabel = isTimedOut
+                          ? 'Timed out'
+                          : run.status === 'running'
+                            ? 'Running'
+                            : run.status;
+                        const StatusIcon =
+                          run.status === 'success'
+                            ? CheckCircle2
+                            : run.status === 'error'
+                              ? AlertCircle
+                              : Loader2;
+                        const iconClass =
+                          run.status === 'success'
+                            ? 'text-emerald-600'
+                            : run.status === 'error'
+                              ? 'text-red-600'
+                              : 'text-amber-600 animate-spin';
+                        return (
+                          <tr
+                            key={run.id}
+                            className="border-b border-[var(--border)]/60 last:border-0 align-top"
+                          >
+                            <td className="py-2 px-1.5">
+                              <div className="font-medium text-[var(--foreground)]">
+                                {jobRunLabel(run.job_name)}
+                              </div>
+                              <div className="text-[10px] text-[var(--muted-foreground)]">
+                                via {run.trigger}
+                              </div>
+                            </td>
+                            <td className="py-2 px-1.5">
+                              <span className="inline-flex items-center gap-1 capitalize">
+                                <StatusIcon className={`h-3.5 w-3.5 ${iconClass}`} />
+                                {statusLabel}
+                              </span>
+                            </td>
+                            <td className="py-2 px-1.5 whitespace-nowrap text-[var(--muted-foreground)]">
+                              {formatJobWhen(run.started_at)}
+                            </td>
+                            <td className="py-2 px-1.5 whitespace-nowrap">
+                              {formatDurationMs(run.duration_ms)}
+                            </td>
+                            <td className="py-2 px-1.5 max-w-[220px]">
+                              <div className="truncate text-[var(--foreground)]" title={run.message || run.error || ''}>
+                                {run.error || run.message || '—'}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           {activeTab === 'overview' && (
           <>
@@ -2176,7 +2472,9 @@ export default function MarketIntelDashboard() {
                     ) : (
                       <div className="mv-empty h-full text-xs">
                         Limited competitor data in current window.<br />
-                        Use Sync, then Refresh to load reviews.
+                        {isAdminView
+                          ? 'Use Sync, then Refresh to load reviews.'
+                          : 'Try a wider date range, or click Refresh after the daily update.'}
                       </div>
                     )}
                   </div>
@@ -2292,7 +2590,9 @@ export default function MarketIntelDashboard() {
                     </div>
                   ) : (
                     <div className="mv-empty py-6">
-                      No Asurion data yet. Run Sync to pull Reddit + BBB reviews.
+                      {isAdminView
+                        ? 'No Asurion data yet. Run Sync to pull Reddit + BBB reviews.'
+                        : 'No Asurion data yet. Data is refreshed daily — try Refresh or a wider date range.'}
                     </div>
                   )}
                 </div>
@@ -2485,7 +2785,11 @@ export default function MarketIntelDashboard() {
                 <div className="mv-section-title mb-1">Recent competitor mentions</div>
                 <div className="mv-section-sub mb-4">Asurion / SquareTrade and related competitors</div>
                 {competitorMentions.length === 0 ? (
-                  <div className="text-sm text-[var(--muted-foreground)]">No competitor data yet. Use Sync, then Refresh.</div>
+                  <div className="text-sm text-[var(--muted-foreground)]">
+                    {isAdminView
+                      ? 'No competitor data yet. Use Sync, then Refresh.'
+                      : 'No competitor data yet. Try Refresh or a wider date range.'}
+                  </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                     {competitorMentions
@@ -2536,9 +2840,11 @@ export default function MarketIntelDashboard() {
               {activeTab === 'competitor' ? 'Competitor insights' : 'Recent insights'}
             </span>
           </div>
-          <Button size="sm" variant="outline" onClick={() => handleIngestAll(false)} disabled={isIngesting} title="Start background data sync (then use Refresh from Database)">
-            <RefreshCw className={`h-3 w-3 mr-1 ${isIngesting ? 'animate-spin' : ''}`} /> Sync
-          </Button>
+          {isAdminView && (
+            <Button size="sm" variant="outline" onClick={() => handleIngestAll(false)} disabled={isIngesting} title="Start background data sync (then use Refresh from Database)">
+              <RefreshCw className={`h-3 w-3 mr-1 ${isIngesting ? 'animate-spin' : ''}`} /> Sync
+            </Button>
+          )}
         </div>
         {activeTab === 'competitor' && (
           <div className="mv-section-sub mb-3">
@@ -2550,7 +2856,9 @@ export default function MarketIntelDashboard() {
             <div className="mv-inset p-4 text-[var(--muted-foreground)] text-xs leading-relaxed">
               No data in current filter.<br />
               {isSupabaseConfigured
-                ? 'Data is populated by the background cron job (or the "Sync" button).'
+                ? isAdminView
+                  ? 'Data is populated by the background cron job (or the "Sync" button).'
+                  : 'Data is populated by the daily background job. Click Refresh to reload.'
                 : 'Supabase keys are placeholders in .env.local — fix and restart.'}
             </div>
           )}
@@ -3050,7 +3358,10 @@ export default function MarketIntelDashboard() {
               </div>
             )}
 
-            <div className="mt-6 flex gap-3">
+            {/* Draft a public reply → protect.likewize.com soft redirect */}
+            <DraftReply mention={selectedInsight} />
+
+            <div className="mt-6 flex gap-3 flex-wrap">
               <Button
                 onClick={() => window.open(selectedInsight.url, '_blank')}
                 className="button-primary text-white"

@@ -1,20 +1,19 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { processAlertDigests } from '@/lib/alertReport';
+import { finishJobRun, startJobRun } from '@/lib/jobRuns';
+import { verifyCronAuth } from '@/lib/cronAuth';
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/sessionAuth';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+/** Alert digests may render screenshots + PDF — allow up to plan max. */
+export const maxDuration = 300;
 
 async function authorized(request: Request): Promise<boolean> {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = request.headers.get('authorization');
-    const querySecret = new URL(request.url).searchParams.get('secret');
-    const provided = authHeader?.replace('Bearer ', '') || querySecret;
-    if (provided === cronSecret) return true;
-  }
+  // Cron secret (Bearer / ?secret=) — same rules as /api/cron/*
+  if (verifyCronAuth(request).ok) return true;
 
+  // Dashboard session (manual "send now" from UI)
   try {
     const jar = await cookies();
     const token = jar.get(SESSION_COOKIE)?.value;
@@ -23,8 +22,7 @@ async function authorized(request: Request): Promise<boolean> {
     /* ignore */
   }
 
-  if (cronSecret) return false;
-  return true;
+  return false;
 }
 
 type ViewSnapshot = {
@@ -88,42 +86,76 @@ async function parseRunOptions(request: Request): Promise<{
   return { force, onlyEmail, viewSnapshot };
 }
 
-export async function GET(request: Request) {
+async function handleRun(request: Request) {
   if (!(await authorized(request))) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  const { force, onlyEmail, viewSnapshot } = await parseRunOptions(request);
+  // Scheduled cron: last 24h only. Manual "send now" / snapshot may use a wider window.
+  const isCron = !onlyEmail && !viewSnapshot && !force;
+  const sinceHours = isCron ? 24 : force || viewSnapshot ? 72 : 24;
+  const startedAt = Date.now();
+  const runId = await startJobRun({
+    jobName: 'notifications',
+    trigger: isCron ? 'cron' : 'api',
+    details: {
+      force,
+      onlyEmail: onlyEmail || null,
+      hasViewSnapshot: !!viewSnapshot,
+      sinceHours,
+    },
+  });
+
   try {
-    const { force, onlyEmail, viewSnapshot } = await parseRunOptions(request);
     const result = await processAlertDigests({
-      sinceHours: 72,
+      sinceHours,
       force,
       onlyEmail,
       viewSnapshot,
     });
-    return NextResponse.json({ success: true, ...result });
+    const failed = result && (result as { ok?: boolean }).ok === false;
+    const errList = Array.isArray((result as { errors?: unknown }).errors)
+      ? ((result as { errors: string[] }).errors)
+      : [];
+    await finishJobRun(runId, {
+      status: failed ? 'error' : 'success',
+      message: summarizeNotifications(result),
+      details: result as Record<string, unknown>,
+      error: failed ? errList.join('; ') || 'alerts failed' : undefined,
+      startedAt,
+    });
+    return NextResponse.json({ success: true, ...result, job_run_id: runId });
   } catch (e: any) {
     console.error('[notifications/run]', e);
-    return NextResponse.json({ success: false, error: e?.message || 'failed' }, { status: 500 });
+    await finishJobRun(runId, {
+      status: 'error',
+      error: e?.message || 'failed',
+      startedAt,
+    });
+    return NextResponse.json(
+      { success: false, error: e?.message || 'failed', job_run_id: runId },
+      { status: 500 },
+    );
   }
 }
 
-export async function POST(request: Request) {
-  if (!(await authorized(request))) {
-    return new Response('Unauthorized', { status: 401 });
-  }
+function summarizeNotifications(result: unknown): string {
+  if (!result || typeof result !== 'object') return 'Alert digests processed';
+  const r = result as Record<string, unknown>;
+  if (typeof r.message === 'string' && r.message) return r.message;
+  const parts: string[] = [];
+  if (typeof r.emailsSent === 'number') parts.push(`${r.emailsSent} email(s) sent`);
+  if (typeof r.subscribers === 'number') parts.push(`${r.subscribers} subscriber(s)`);
+  if (Array.isArray(r.errors) && r.errors.length) parts.push(`${r.errors.length} error(s)`);
+  if (r.ok === false && !parts.length) return 'Alert digests failed';
+  return parts.length ? parts.join(' · ') : 'Alert digests processed';
+}
 
-  try {
-    const { force, onlyEmail, viewSnapshot } = await parseRunOptions(request);
-    const result = await processAlertDigests({
-      sinceHours: 72,
-      force,
-      onlyEmail,
-      viewSnapshot,
-    });
-    return NextResponse.json({ success: true, ...result });
-  } catch (e: any) {
-    console.error('[notifications/run]', e);
-    return NextResponse.json({ success: false, error: e?.message || 'failed' }, { status: 500 });
-  }
+export async function GET(request: Request) {
+  return handleRun(request);
+}
+
+export async function POST(request: Request) {
+  return handleRun(request);
 }

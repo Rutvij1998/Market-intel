@@ -1,72 +1,110 @@
 import { NextResponse } from 'next/server';
 import { runIngestion } from '@/lib/ingest';
+import { finishJobRun, startJobRun } from '@/lib/jobRuns';
+import { unauthorizedCronResponse, verifyCronAuth } from '@/lib/cronAuth';
 
 export const dynamic = 'force-dynamic';
+/** Ingest scrapes Reddit + BBB and can take several minutes. Hobby/Pro max is typically 300s. */
+export const maxDuration = 300;
 
 // Cron endpoint for daily background data collection (Reddit + Trustpilot + BBB).
 // Always performs incremental 'update' ingestion and writes results to Supabase first.
-// The UI (both Overview and Competitor tabs) loads exclusively from Supabase via loadFromSupabase().
+// The UI loads exclusively from Supabase via loadFromSupabase().
 //
-// Authentication:
-// - If CRON_SECRET is set in the environment, the request must include it via
-//     Authorization: Bearer <value>
-//   or
-//     ?secret=<value>
-// - If CRON_SECRET is not set, any call is allowed (simple for Vercel Cron + local testing).
+// Auth: if CRON_SECRET is set, require Authorization: Bearer <secret> or ?secret=
+// Vercel Cron injects the Bearer header automatically when CRON_SECRET is configured.
 //
-// Setting up a daily cron job ("every day"):
-//   Best option: Vercel Cron Jobs (recommended if you deploy to Vercel)
-//     - Add a vercel.json with a "crons" array (one is already created in this project).
-//     - Example schedule for every day at 08:00 UTC:
-//         "crons": [ { "path": "/api/cron/ingest", "schedule": "0 8 * * *" } ]
-//     - To use authentication, put the secret in the path:
-//         "path": "/api/cron/ingest?secret=YOUR_CRON_SECRET_VALUE"
-//     - Or simply omit CRON_SECRET from production env vars (Vercel trusts its own cron calls).
-//
-//   Other options (works with any host):
-//     - GitHub Actions scheduled workflow that does a curl to your deployed URL + secret.
-//     - Free services like https://cron-job.org
-//     - Your own server / VPS crontab: 0 8 * * * curl -s "https://your-domain/api/cron/ingest?secret=xxx"
-//
-// Local testing:
-//   curl http://localhost:3000/api/cron/ingest
-//   (or with ?secret= if you set CRON_SECRET in .env.local)
-//
-// The endpoint always uses mode: 'update'. Use the dashboard button for occasional full refreshes.
+// Schedule: vercel.json → "0 8 * * *" (daily 08:00 UTC; Hobby may fire anytime that hour)
+// Window: last 24 hours of source data only, then email digests for active alert subscribers.
+
+/** Daily cron lookback for scrape + alert digests */
+const CRON_SINCE_HOURS = 24;
 
 export async function GET(request: Request) {
-  const cronSecret = process.env.CRON_SECRET;
-
-  if (cronSecret) {
-    const authHeader = request.headers.get('authorization');
-    const querySecret = new URL(request.url).searchParams.get('secret');
-    const provided = authHeader?.replace('Bearer ', '') || querySecret;
-
-    if (provided !== cronSecret) {
-      return new Response('Unauthorized', { status: 401 });
-    }
+  const auth = verifyCronAuth(request);
+  if (!auth.ok) {
+    // Persist failed attempts so admin can see cron is hitting but failing auth
+    const startedAt = Date.now();
+    const runId = await startJobRun({
+      jobName: 'cron_ingest',
+      trigger: 'cron',
+      details: { authFailed: true, reason: auth.reason },
+    });
+    await finishJobRun(runId, {
+      status: 'error',
+      error: auth.reason,
+      message: 'Rejected: unauthorized',
+      startedAt,
+    });
+    console.error('[cron/ingest] unauthorized:', auth.reason);
+    return unauthorizedCronResponse(auth.reason);
   }
 
+  const startedAt = Date.now();
+  const runId = await startJobRun({
+    jobName: 'cron_ingest',
+    trigger: auth.mode === 'vercel-cron' || auth.mode === 'open' ? 'cron' : 'api',
+    details: {
+      mode: 'update',
+      sinceHours: CRON_SINCE_HOURS,
+      authMode: auth.mode,
+    },
+  });
+
   try {
-    // For scheduled cron, use 'update' mode for incremental collection.
-    const result = await runIngestion({ mode: 'update' });
-    // After ingest, email PDF digests for new threads matching alert enrollments
+    // Only ingest posts/reviews from the last 24 hours
+    const result = await runIngestion({ mode: 'update', sinceHours: CRON_SINCE_HOURS });
+    // Email digests for subscribers whose filters match those new events
     let alerts: unknown = null;
     try {
       const { processAlertDigests } = await import('@/lib/alertReport');
-      alerts = await processAlertDigests({ sinceHours: 48 });
-    } catch (e: any) {
-      console.error('[cron] alert digests failed:', e?.message || e);
-      alerts = { ok: false, error: e?.message || 'alerts failed' };
+      alerts = await processAlertDigests({ sinceHours: CRON_SINCE_HOURS });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[cron] alert digests failed:', msg);
+      alerts = { ok: false, error: msg };
     }
-    return NextResponse.json({ ...result, alerts });
-  } catch (error: any) {
+
+    const message =
+      result.message ||
+      `Ingested last ${CRON_SINCE_HOURS}h: ${result.count ?? 0} mentions` +
+        (result.sources
+          ? ` (reddit=${result.sources.reddit}, pc=${result.sources.pissedconsumer}, bbb=${result.sources.bbb})`
+          : '');
+
+    await finishJobRun(runId, {
+      status: result.success === false ? 'error' : 'success',
+      message,
+      details: {
+        count: result.count,
+        sources: result.sources,
+        sinceHours: CRON_SINCE_HOURS,
+        alerts,
+        authMode: auth.mode,
+      },
+      error: result.success === false ? result.message || 'ingest failed' : undefined,
+      startedAt,
+    });
+
+    return NextResponse.json({
+      ...result,
+      sinceHours: CRON_SINCE_HOURS,
+      alerts,
+      job_run_id: runId,
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error('Cron ingest error:', error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    await finishJobRun(runId, {
+      status: 'error',
+      error: msg,
+      message: 'Cron ingest failed',
+      startedAt,
+    });
+    return NextResponse.json({ success: false, error: msg, job_run_id: runId }, { status: 500 });
   }
 }
 
-// Also support POST for flexibility
 export async function POST(request: Request) {
   return GET(request);
 }

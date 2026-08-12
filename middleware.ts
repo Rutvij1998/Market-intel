@@ -12,6 +12,7 @@ export async function middleware(request: NextRequest) {
     pathname === '/' ||
     pathname.startsWith('/sign-in') ||
     pathname.startsWith('/api/auth/') ||
+    // Cron routes are public at the edge; each route enforces CRON_SECRET itself.
     pathname.startsWith('/api/cron') ||
     pathname.startsWith('/api/notifications/run') ||
     pathname.startsWith('/api/notifications/unsubscribe') ||

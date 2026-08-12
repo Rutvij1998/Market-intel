@@ -2,8 +2,10 @@ import Link from 'next/link';
 import {
   ArrowRight,
   BarChart3,
+  Bell,
   LineChart,
   Lock,
+  MessageSquareReply,
   Shield,
   Sparkles,
   Star,
@@ -13,7 +15,7 @@ import {
 export const metadata = {
   title: 'Market Vantage · Likewize',
   description:
-    'Competitive market intelligence for Likewize — sentiment, sources, business lines, and competitor response.',
+    'Competitive market intelligence for Likewize — sentiment, sources, business lines, AI replies, and competitor response.',
 };
 
 const features = [
@@ -28,6 +30,11 @@ const features = [
     body: 'Drill into concrete issues: portal friction, replacement quality, repair workmanship, shipping, deductibles — with thread-level evidence.',
   },
   {
+    icon: MessageSquareReply,
+    title: 'Reply with AI',
+    body: 'From any thread in the dashboard, draft a short public reply in Likewize’s we/us voice — acknowledge the issue, invite a DM or protect.likewize.com, and make sure the customer is taken care of. Edit, regenerate, and submit from the same panel.',
+  },
+  {
     icon: Users,
     title: 'Competitor lens',
     body: 'Compare Likewize vs Asurion on pillars, support responsiveness (including u/Asurion_Sam), and share of voice.',
@@ -36,6 +43,11 @@ const features = [
     icon: LineChart,
     title: 'Always current',
     body: 'Ingest from Reddit, BBB, and review sites into one dashboard your team can filter by client, line, and time range.',
+  },
+  {
+    icon: Bell,
+    title: 'Email alerts & digests',
+    body: 'Enroll for PDF digests when new threads match your clients or business lines — so CX and Product stay ahead without living in the dashboard.',
   },
 ];
 
@@ -92,8 +104,7 @@ export default function HomePage() {
           </h1>
           <p className="mt-5 text-base sm:text-lg text-[var(--muted-foreground)] max-w-2xl leading-relaxed">
             One place to track brand mentions, sentiment by pillar, business-line mix, and
-            competitor support behavior. Sign in with the Likewize dashboard credentials to open
-            the live app.
+            competitor support behavior. Sign in with your @likewize.com email to open the live app.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Link
@@ -113,7 +124,7 @@ export default function HomePage() {
           </div>
           <p className="mt-4 text-xs text-[var(--muted-foreground)] flex items-center gap-1.5">
             <Shield className="h-3.5 w-3.5 text-[var(--primary)]" />
-            Dashboard access requires the shared Likewize username and password.
+            Dashboard access is limited to @likewize.com emails via a one-time code.
           </p>
         </div>
       </section>
@@ -128,7 +139,7 @@ export default function HomePage() {
             From source mix to drill-down threads — evidence you can act on, filtered by client and
             business line.
           </p>
-          <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
+          <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
             {features.map((f) => {
               const Icon = f.icon;
               return (
@@ -171,8 +182,8 @@ export default function HomePage() {
                 Ready when you are
               </h2>
               <p className="mt-2 text-white/80 text-sm sm:text-base leading-relaxed">
-                Sign in with the Likewize team credentials. After login you&apos;ll land on the live
-                Market Vantage dashboard.
+                Sign in with your @likewize.com email. After you verify the one-time code you&apos;ll
+                land on the live Market Vantage dashboard.
               </p>
               <Link
                 href="/sign-in"
