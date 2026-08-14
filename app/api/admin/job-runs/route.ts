@@ -15,8 +15,8 @@ export async function GET(request: Request) {
     ...cronAuthDiagnostics(),
     productionUrl: process.env.NEXT_PUBLIC_APP_URL || null,
     schedule: {
-      cron_ingest: 'Daily 08:00 UTC → /api/cron/ingest (maxDuration 300s · last 24h data)',
-      notifications: 'Daily 09:00 UTC → /api/notifications/run (maxDuration 300s · last 24h)',
+      cron_ingest: 'Twice daily 13:00 & 01:00 UTC → /api/cron/ingest (maxDuration 300s · last 24h)',
+      notifications: 'Twice daily 13:30 & 01:30 UTC → /api/notifications/run (maxDuration 300s · last 24h)',
     },
     notes: [
       'Jobs stuck in "running" past their limit are auto-closed as timed out when you refresh logs.',

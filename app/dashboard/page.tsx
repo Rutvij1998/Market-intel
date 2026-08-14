@@ -1647,7 +1647,7 @@ export default function MarketIntelDashboard() {
                     </span>
                   </div>
                   <p className="text-xs text-[var(--muted-foreground)] mt-1">
-                    Last runs for daily ingest (08:00 UTC, last 24h data) and alert digests (09:00 UTC). Refresh closes abandoned &quot;running&quot; jobs that timed out.
+                    Last runs for ingest (13:00 &amp; 01:00 UTC) and alert digests (13:30 &amp; 01:30 UTC). Refresh closes abandoned &quot;running&quot; jobs that timed out.
                   </p>
                   {jobRunsDiagnostics && (
                     <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
