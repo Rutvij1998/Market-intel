@@ -30,9 +30,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Dashboard + other app APIs require session
+  // Dashboard, admin console, and app APIs require session
   const needsAuth =
     pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/admin') ||
     pathname.startsWith('/api/');
 
   if (!needsAuth) {

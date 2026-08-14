@@ -3,11 +3,19 @@
   "crons": [
     {
       "path": "/api/cron/ingest",
-      "schedule": "0 8 * * *"
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/ingest",
+      "schedule": "0 1 * * *"
     },
     {
       "path": "/api/notifications/run",
-      "schedule": "0 9 * * *"
+      "schedule": "30 13 * * *"
+    },
+    {
+      "path": "/api/notifications/run",
+      "schedule": "30 1 * * *"
     }
   ],
   "functions": {

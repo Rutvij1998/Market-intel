@@ -18,6 +18,8 @@ import { toast } from "sonner";
 
 type Props = {
   mention: ClassifiedMention;
+  /** When false, show a locked message instead of the AI reply tools. Default true for back-compat. */
+  canReply?: boolean;
 };
 
 type Busy = null | "generate" | "rewrite" | "submit";
@@ -32,7 +34,7 @@ function isRedditSource(mention: ClassifiedMention): boolean {
   return s.includes("reddit") || u.includes("reddit.com") || u.includes("redd.it");
 }
 
-export function DraftReply({ mention }: Props) {
+export function DraftReply({ mention, canReply = true }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Busy>(null);
   const [reply, setReply] = useState("");
@@ -287,6 +289,25 @@ export function DraftReply({ mention }: Props) {
 
   const loading = busy !== null;
   const reddit = isRedditSource(mention);
+
+  if (!canReply) {
+    return (
+      <div className="mt-5 rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-3">
+        <div className="flex items-start gap-2.5">
+          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white border border-[var(--border)]">
+            <MessageSquareReply className="h-4 w-4 text-[var(--muted-foreground)]" />
+          </span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--foreground)]">AI Reply restricted</div>
+            <p className="mt-0.5 text-xs text-[var(--muted-foreground)] leading-relaxed">
+              Your account can view the dashboard, but the AI Reply module is limited to designated
+              responders. Ask a Market Vantage admin to grant the <strong>responder</strong> role.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-5 space-y-3">

@@ -103,12 +103,13 @@ export function dashboardUrlForSubscription(
     u.searchParams.set('range', focus?.range || 'All');
     u.searchParams.set('exact', '1');
   } else {
+    // Prefer explicit focus, else single-client subscription, else omit (all clients only if sub allows)
     const client =
       focus?.client ||
       (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
     if (client && client !== 'All') u.searchParams.set('client', client);
 
-    const skipLine = focus?.skipLineFilter !== false;
+    const skipLine = focus?.skipLineFilter === true;
     if (!skipLine) {
       const line =
         focus?.line ||
@@ -138,6 +139,45 @@ export function focusFromViewSnapshot(snap: DashboardViewSnapshot): ScreenshotFo
     exactSnapshot: true,
     eventOnly: false,
     skipLineFilter: false,
+  };
+}
+
+/**
+ * Screenshot focus derived from the subscription filters (not "all clients").
+ * Multi-client subs are handled in buildTargets (one shot per client).
+ */
+export function focusFromSubscription(
+  sub: ScreenshotSub,
+  opts?: { preferredClient?: string; range?: ScreenshotFocus['range'] },
+): ScreenshotFocus {
+  const range = opts?.range || 'All';
+  const singleLine =
+    !sub.all_business_lines && sub.business_lines?.length === 1
+      ? sub.business_lines[0]
+      : undefined;
+
+  let client: string | undefined;
+  if (opts?.preferredClient && opts.preferredClient !== 'All') {
+    // Only use preferred if it's in the sub's allowlist (or all clients)
+    if (
+      sub.all_clients ||
+      (sub.clients || []).some((c) => c.toLowerCase() === opts.preferredClient!.toLowerCase())
+    ) {
+      client = opts.preferredClient;
+    }
+  }
+  if (!client && !sub.all_clients && sub.clients?.length === 1) {
+    client = sub.clients[0];
+  }
+
+  return {
+    tab: 'overview',
+    range,
+    client,
+    line: singleLine,
+    exactSnapshot: true,
+    eventOnly: false,
+    skipLineFilter: !singleLine,
   };
 }
 
@@ -173,62 +213,95 @@ async function pageLooksEmpty(getText: () => Promise<string>): Promise<boolean> 
 type Target = { url: string; filename: string; label: string };
 
 function buildTargets(sub: ScreenshotSub, focus?: ScreenshotFocus): Target[] {
-  // Exact snapshot of what the user had open — single URL, no fallback that changes filters
+  const range = focus?.range || 'All';
+  const singleLine =
+    focus?.line ||
+    (!sub.all_business_lines && sub.business_lines?.length === 1
+      ? sub.business_lines[0]
+      : undefined);
+
+  // Exact snapshot of what the user had open — single URL, never expand filters
   if (focus?.exactSnapshot) {
+    // Multi-client subscription without a specific focus client → one shot per subscribed client
+    if (
+      !focus.client &&
+      !sub.all_clients &&
+      Array.isArray(sub.clients) &&
+      sub.clients.length > 1
+    ) {
+      return sub.clients.slice(0, 4).map((client) => {
+        const f: ScreenshotFocus = {
+          ...focus,
+          client,
+          line: singleLine,
+          exactSnapshot: true,
+          skipLineFilter: !singleLine,
+        };
+        const safe = client.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 40);
+        return {
+          url: dashboardUrlForSubscription(sub, focus.tab || 'overview', f),
+          filename: `market-vantage-${safe}-${range}.png`,
+          label: `Dashboard · ${client}${singleLine ? ` · ${singleLine}` : ''} · ${range}`,
+        };
+      });
+    }
+
     const parts = [
       focus.tab || 'overview',
-      focus.range || 'All',
-      focus.client || 'all-clients',
-      focus.line || 'all-lines',
+      range,
+      focus.client || (sub.all_clients ? 'all-clients' : sub.clients?.[0] || 'clients'),
+      singleLine || 'all-lines',
     ];
     const safe = parts.join('-').replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 60);
+    const f: ScreenshotFocus = {
+      ...focus,
+      line: singleLine || focus.line,
+      exactSnapshot: true,
+      skipLineFilter: !singleLine,
+    };
+    // If still no client but sub has exactly one, apply it
+    if (!f.client && !sub.all_clients && sub.clients?.length === 1) {
+      f.client = sub.clients[0];
+    }
     return [
       {
-        url: dashboardUrlForSubscription(sub, focus.tab || 'overview', focus),
+        url: dashboardUrlForSubscription(sub, focus.tab || 'overview', f),
         filename: `market-vantage-snapshot-${safe}.png`,
-        label: `Live snapshot · ${focus.tab || 'overview'} · ${focus.range || 'All'}${
-          focus.client ? ` · ${focus.client}` : ''
-        }${focus.line ? ` · ${focus.line}` : ''}`,
+        label: `Dashboard · ${f.client || (sub.all_clients ? 'All clients' : 'Filtered')}${
+          f.line ? ` · ${f.line}` : ''
+        } · ${range}`,
       },
     ];
   }
 
-  const eventOnly = focus?.eventOnly !== false && !!focus?.client;
-  const baseFocus: ScreenshotFocus = {
-    ...focus,
-    range: 'All',
-    skipLineFilter: true,
-  };
+  // Non-exact (legacy): still honor subscription — never silently fall back to unfiltered all-clients
+  const clientsToCapture: Array<string | undefined> = [];
+  if (focus?.client) {
+    clientsToCapture.push(focus.client);
+  } else if (!sub.all_clients && sub.clients?.length) {
+    clientsToCapture.push(...sub.clients.slice(0, 4));
+  } else {
+    clientsToCapture.push(undefined); // truly all clients
+  }
 
-  if (eventOnly) {
-    const tab = focus?.tab || 'overview';
-    const labelClient = focus?.client || 'event';
+  return clientsToCapture.map((client) => {
+    const f: ScreenshotFocus = {
+      tab: focus?.tab || 'overview',
+      range,
+      client,
+      line: singleLine,
+      exactSnapshot: true,
+      skipLineFilter: !singleLine,
+      eventOnly: false,
+    };
+    const labelClient = client || 'All clients';
     const safe = labelClient.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 40);
-    return [
-      {
-        url: dashboardUrlForSubscription(sub, tab, { ...baseFocus, client: focus?.client }),
-        filename: `market-vantage-${safe}.png`,
-        label: `Dashboard · ${labelClient} · All dates`,
-      },
-      {
-        url: dashboardUrlForSubscription(sub, 'overview', {
-          range: 'All',
-          skipLineFilter: true,
-          eventOnly: false,
-        }),
-        filename: `market-vantage-${safe}-fallback.png`,
-        label: 'Dashboard · Overview · All dates',
-      },
-    ];
-  }
-
-  return [
-    {
-      url: dashboardUrlForSubscription(sub, 'overview', baseFocus),
-      filename: 'market-vantage-overview.png',
-      label: 'Dashboard · Overview · All dates',
-    },
-  ];
+    return {
+      url: dashboardUrlForSubscription(sub, f.tab, f),
+      filename: `market-vantage-${safe}-${range}.png`,
+      label: `Dashboard · ${labelClient}${singleLine ? ` · ${singleLine}` : ''} · ${range}`,
+    };
+  });
 }
 
 /**
@@ -361,7 +434,8 @@ async function captureWithPuppeteer(
       });
     }
 
-    let chosen: Target | null = null;
+    // Capture every target (one per client filter). Never swap in an unfiltered dashboard.
+    const shots: DashboardShot[] = [];
     for (const t of targets) {
       console.log(`[screenshot] Opening ${t.url}`);
       const res = await page.goto(t.url, {
@@ -380,27 +454,24 @@ async function captureWithPuppeteer(
       if (!opts.exact) {
         const empty = await pageLooksEmpty(() => page.evaluate(() => document.body.innerText));
         if (empty) {
-          console.warn(`[screenshot] Empty UI for ${t.url} — trying next URL`);
-          continue;
+          console.warn(`[screenshot] Empty UI for ${t.url} — still capturing filtered view`);
         }
       }
-      chosen = t;
-      break;
+
+      const png = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
+      shots.push(shotFromPng(png, t.filename.replace(/-fallback/, ''), t.label));
     }
 
-    if (!chosen) {
-      const t = targets[targets.length - 1]!;
-      console.warn(`[screenshot] Using last target ${t.url}`);
+    if (!shots.length && targets.length) {
+      const t = targets[0]!;
+      console.warn(`[screenshot] Retrying first target ${t.url}`);
       await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 50_000 });
       await settleDashboard(page);
-      chosen = t;
+      const png = Buffer.from(await page.screenshot({ type: 'png', fullPage: true }));
+      shots.push(shotFromPng(png, t.filename, t.label));
     }
 
-    // Full page for PDF (entire scrollable dashboard)
-    const png = Buffer.from(
-      await page.screenshot({ type: 'png', fullPage: true }),
-    );
-    return [shotFromPng(png, chosen.filename.replace(/-fallback/, ''), chosen.label)];
+    return shots;
   } finally {
     await browser.close().catch(() => undefined);
   }
@@ -436,7 +507,7 @@ async function captureWithPlaywright(
       },
     ]);
 
-    let chosen: Target | null = null;
+    const shots: DashboardShot[] = [];
     for (const t of targets) {
       console.log(`[screenshot] Opening ${t.url}`);
       const res = await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
@@ -448,25 +519,25 @@ async function captureWithPlaywright(
       if (!opts.exact) {
         const empty = await pageLooksEmpty(() => page.innerText('body'));
         if (empty) {
-          console.warn(`[screenshot] Empty UI for ${t.url} — trying next`);
-          continue;
+          console.warn(`[screenshot] Empty UI for ${t.url} — still capturing filtered view`);
         }
       }
-      chosen = t;
-      break;
+      const png = Buffer.from(
+        await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled' }),
+      );
+      shots.push(shotFromPng(png, t.filename.replace(/-fallback/, ''), t.label));
     }
-    if (!chosen) {
-      const t = targets[targets.length - 1]!;
+    if (!shots.length && targets.length) {
+      const t = targets[0]!;
       await page.goto(t.url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
       await settleDashboard(page);
-      chosen = t;
+      const png = Buffer.from(
+        await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled' }),
+      );
+      shots.push(shotFromPng(png, t.filename, t.label));
     }
-
-    const png = Buffer.from(
-      await page.screenshot({ fullPage: true, type: 'png', animations: 'disabled' }),
-    );
     await context.close();
-    return [shotFromPng(png, chosen.filename.replace(/-fallback/, ''), chosen.label)];
+    return shots;
   } finally {
     await browser.close().catch(() => undefined);
   }

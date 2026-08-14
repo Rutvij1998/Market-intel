@@ -303,6 +303,9 @@ export default function MarketIntelDashboard() {
   const [alertEnrollOpen, setAlertEnrollOpen] = useState(false);
   /** Admin tools (Sync) — enable via ?admin=1. Regular users rely on cron + Refresh. */
   const [isAdminView, setIsAdminView] = useState(false);
+  /** Session role permissions (AI Reply gated to responder/admin). */
+  const [canReply, setCanReply] = useState(false);
+  const [canAdminConsole, setCanAdminConsole] = useState(false);
   /** Admin: recent cron / ingest job run logs */
   const [jobRuns, setJobRuns] = useState<JobRunRow[]>([]);
   const [jobRunsLastByJob, setJobRunsLastByJob] = useState<Record<string, JobRunRow>>({});
@@ -316,6 +319,33 @@ export default function MarketIntelDashboard() {
     vercelEnv?: string | null;
     notes?: string[];
   } | null>(null);
+
+  // Load role / reply permission for the signed-in user
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok && json?.ok) {
+          setCanReply(!!json.permissions?.reply);
+          setCanAdminConsole(!!json.permissions?.admin);
+        } else {
+          setCanReply(false);
+          setCanAdminConsole(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setCanReply(false);
+          setCanAdminConsole(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Keep Recent Insights rail the exact same height as the main dashboard column (desktop)
   const dashboardColRef = useRef<HTMLDivElement>(null);
@@ -1323,9 +1353,19 @@ export default function MarketIntelDashboard() {
             </div>
             <div className="text-xs text-white/70 mt-0.5">vs prior period</div>
           </div>
-          <div className="px-1 flex items-center justify-between gap-2">
-            <span className="text-[10px] uppercase tracking-wider text-white/50">Account</span>
-            <UserMenu />
+          <div className="px-1 flex flex-col gap-2">
+            {canAdminConsole && (
+              <a
+                href="/admin"
+                className="inline-flex items-center justify-center gap-1.5 rounded-full border border-white/25 bg-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white/90 hover:bg-white/15"
+              >
+                Admin console
+              </a>
+            )}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] uppercase tracking-wider text-white/50">Account</span>
+              <UserMenu />
+            </div>
           </div>
         </div>
       </div>
@@ -3358,8 +3398,8 @@ export default function MarketIntelDashboard() {
               </div>
             )}
 
-            {/* Draft a public reply → protect.likewize.com soft redirect */}
-            <DraftReply mention={selectedInsight} />
+            {/* Draft a public reply — gated by responder/admin role */}
+            <DraftReply mention={selectedInsight} canReply={canReply} />
 
             <div className="mt-6 flex gap-3 flex-wrap">
               <Button

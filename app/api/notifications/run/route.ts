@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 import { processAlertDigests } from '@/lib/alertReport';
 import { finishJobRun, startJobRun } from '@/lib/jobRuns';
 import { verifyCronAuth } from '@/lib/cronAuth';
+import { notifyCronOutcome } from '@/lib/cronNotify';
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/sessionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -118,13 +119,32 @@ async function handleRun(request: Request) {
     const errList = Array.isArray((result as { errors?: unknown }).errors)
       ? ((result as { errors: string[] }).errors)
       : [];
+    const message = summarizeNotifications(result);
     await finishJobRun(runId, {
       status: failed ? 'error' : 'success',
-      message: summarizeNotifications(result),
+      message,
       details: result as Record<string, unknown>,
       error: failed ? errList.join('; ') || 'alerts failed' : undefined,
       startedAt,
     });
+
+    // Ops notify for scheduled cron only (not every manual "Send email now")
+    if (isCron) {
+      await notifyCronOutcome({
+        jobName: 'notifications',
+        status: failed ? 'error' : 'success',
+        message,
+        error: failed ? errList.join('; ') || 'alerts failed' : undefined,
+        details: {
+          emailsSent: (result as { emailsSent?: number }).emailsSent,
+          subscribers: (result as { subscribers?: number }).subscribers,
+          sinceHours,
+        },
+        durationMs: Date.now() - startedAt,
+        jobRunId: runId,
+      });
+    }
+
     return NextResponse.json({ success: true, ...result, job_run_id: runId });
   } catch (e: any) {
     console.error('[notifications/run]', e);
@@ -133,6 +153,16 @@ async function handleRun(request: Request) {
       error: e?.message || 'failed',
       startedAt,
     });
+    if (isCron) {
+      await notifyCronOutcome({
+        jobName: 'notifications',
+        status: 'error',
+        message: 'Alert digests failed',
+        error: e?.message || 'failed',
+        durationMs: Date.now() - startedAt,
+        jobRunId: runId,
+      });
+    }
     return NextResponse.json(
       { success: false, error: e?.message || 'failed', job_run_id: runId },
       { status: 500 },

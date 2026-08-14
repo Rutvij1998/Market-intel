@@ -10,8 +10,13 @@ import {
   formatBusinessLine,
   formatMentionSourceLabel,
   getMentionClient,
+  normalizeClientLabel,
   type BusinessLine,
 } from '@/lib/utils';
+import {
+  describeSubscriptionFilters,
+  generateAlertInsights,
+} from '@/lib/alertInsights';
 
 export interface AlertSubscription {
   id: string;
@@ -83,14 +88,22 @@ function normalizeMention(row: AlertMentionRow) {
 
 export type NormalizedAlertMention = ReturnType<typeof normalizeMention>;
 
+function clientsEqual(a: string, b: string): boolean {
+  const na = normalizeClientLabel(a).toLowerCase();
+  const nb = normalizeClientLabel(b).toLowerCase();
+  if (na === nb) return true;
+  // soft contains for stored labels vs UI picks
+  if (na.length >= 3 && nb.length >= 3 && (na.includes(nb) || nb.includes(na))) return true;
+  return false;
+}
+
 export function subscriptionMatches(
   sub: AlertSubscription,
   m: NormalizedAlertMention,
 ): boolean {
   const clientOk =
     sub.all_clients ||
-    (Array.isArray(sub.clients) &&
-      sub.clients.some((c) => c.toLowerCase() === m.client.toLowerCase()));
+    (Array.isArray(sub.clients) && sub.clients.some((c) => clientsEqual(c, m.client)));
   const lineOk =
     sub.all_business_lines ||
     (Array.isArray(sub.business_lines) &&
@@ -101,6 +114,7 @@ export function subscriptionMatches(
   const hasClientFilter = sub.all_clients || (sub.clients?.length ?? 0) > 0;
   const hasLineFilter = sub.all_business_lines || (sub.business_lines?.length ?? 0) > 0;
   if (!hasClientFilter && !hasLineFilter) return false;
+  // When both dimensions are configured, require both (AND)
   if (hasClientFilter && hasLineFilter) return clientOk && lineOk;
   if (hasClientFilter) return clientOk;
   return lineOk;
@@ -140,12 +154,12 @@ export async function buildAlertPdf(opts: {
         `Lines: ${sub.business_lines.map((l) => formatBusinessLine(l as BusinessLine) || l).join(', ')}`,
       );
     }
-    doc.font('Helvetica-Bold').fillColor('#3200BE').text('Your filters');
+    doc.font('Helvetica-Bold').fillColor('#3200BE').text('Your filters (only these are included)');
     doc.font('Helvetica').fillColor('#1a0b3d').text(filterParts.join(' · ') || '—');
     doc.moveDown(0.8);
 
     if (!matches.length) {
-      doc.text('No new matching threads in this period.');
+      doc.text('No new matching threads for these filters in this period.');
       doc.end();
       return;
     }
@@ -330,9 +344,13 @@ export async function processAlertDigests(opts?: {
         captureDashboardScreenshots,
         screenshotsToPdf,
         dashboardUrlForSubscription,
+        focusFromViewSnapshot,
+        focusFromSubscription,
       } = await import('@/lib/dashboardScreenshot');
 
-      // Focus screenshot + deep-link on the primary client in this batch (e.g. Newegg, Rogers)
+      const filterLabel = describeSubscriptionFilters(sub);
+
+      // Clients that actually matched (already subscription-filtered)
       const clientCounts = new Map<string, number>();
       for (const m of matches) {
         clientCounts.set(m.client, (clientCounts.get(m.client) || 0) + 1);
@@ -342,31 +360,26 @@ export async function processAlertDigests(opts?: {
         .map(([c]) => c);
       const primaryClient =
         clientsInvolved[0] ||
-        (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined);
-      // Prefer exact UI snapshot when user clicked Send (what was open on screen).
-      // Otherwise auto-alerts use All dates + skip line filters.
+        (!sub.all_clients && sub.clients?.length === 1 ? sub.clients[0] : undefined) ||
+        'your filters';
+
+      // Screenshots: exact UI snapshot if user clicked Send; else ALWAYS subscription filters
+      // (never unfiltered “all clients” overview unless the sub is all_clients).
       let focus: import('@/lib/dashboardScreenshot').ScreenshotFocus;
       if (opts?.viewSnapshot) {
-        const { focusFromViewSnapshot } = await import('@/lib/dashboardScreenshot');
         focus = focusFromViewSnapshot(opts.viewSnapshot);
-      } else if (primaryClient) {
-        focus = {
-          client: primaryClient,
-          tab: 'overview',
-          range: 'All',
-          eventOnly: true,
-          skipLineFilter: true,
-        };
       } else {
-        focus = {
-          tab: 'overview',
+        focus = focusFromSubscription(sub, {
+          preferredClient: primaryClient !== 'your filters' ? primaryClient : undefined,
           range: 'All',
-          eventOnly: false,
-          skipLineFilter: true,
-        };
+        });
       }
 
-      // Screenshots are best-effort on Vercel. Always still send the email.
+      console.log(
+        `[alerts] ${sub.email} filters=${filterLabel} matches=${matches.length} ` +
+          `shotFocus client=${focus.client || '(all)'} line=${focus.line || '(all)'} exact=${!!focus.exactSnapshot}`,
+      );
+
       let shots: Awaited<ReturnType<typeof captureDashboardScreenshots>> = [];
       try {
         shots = await captureDashboardScreenshots(sub, focus);
@@ -380,16 +393,45 @@ export async function processAlertDigests(opts?: {
         errors.push(`${sub.email}: screenshot skipped — ${short}`);
       }
 
-      // Always try full-page PDF when we have PNG(s)
-      let pdf: Buffer | null = null;
+      // Dashboard PNG(s) → multi-page PDF
+      let dashPdf: Buffer | null = null;
       if (shots.length) {
         try {
-          pdf = await screenshotsToPdf(shots);
+          dashPdf = await screenshotsToPdf(shots);
         } catch (pdfErr: any) {
-          console.error('[alerts] PDF embed failed (still sending email):', pdfErr);
-          errors.push(`${sub.email}: PDF build failed — PNG still attached if present`);
+          console.error('[alerts] dashboard PDF failed:', pdfErr);
+          errors.push(`${sub.email}: dashboard PDF failed — PNG still attached if present`);
         }
       }
+
+      // Thread list PDF for this subscriber's matches only
+      let threadsPdf: Buffer | null = null;
+      try {
+        threadsPdf = await buildAlertPdf({
+          email: sub.email,
+          matches,
+          sub,
+          since,
+        });
+      } catch (tpErr: any) {
+        console.error('[alerts] threads PDF failed:', tpErr);
+      }
+
+      // AI insights from filtered matches (+ filter names)
+      const shotLabel = shots.map((s) => s.label).join('; ') || undefined;
+      const { insights, provider: insightsProvider } = await generateAlertInsights({
+        sub,
+        matches: matches.map((m) => ({
+          client: m.client,
+          businessLineLabel: m.businessLineLabel,
+          source: m.source,
+          sentiment: m.sentiment,
+          pillar: m.pillar,
+          title: m.title || '',
+          text: m.text || '',
+        })),
+        screenshotLabel: shotLabel,
+      });
 
       const dashUrl = dashboardUrlForSubscription(sub, focus.tab || 'overview', focus);
       const unsubUrl = `${base}/api/notifications/unsubscribe?token=${encodeURIComponent(sub.unsubscribe_token)}`;
@@ -403,29 +445,48 @@ export async function processAlertDigests(opts?: {
           ]
             .filter(Boolean)
             .join(' · ')
-        : undefined;
+        : filterLabel;
 
       const { subject, html, text } = buildEventAlertEmail({
         matches,
-        clientsInvolved,
-        primaryClient: primaryClient || 'your monitored accounts',
+        clientsInvolved:
+          clientsInvolved.length > 0
+            ? clientsInvolved
+            : !sub.all_clients && sub.clients?.length
+              ? sub.clients
+              : ['All clients'],
+        primaryClient,
         dashUrl,
         unsubUrl,
-        hasPdf: !!pdf,
+        hasPdf: !!(dashPdf || threadsPdf),
         shotCount: shots.length,
         manualSend: !!opts?.force,
         exactSnapshot: !!opts?.viewSnapshot,
         snapshotLabel: snapLabel,
+        filterLabel,
+        insights,
+        insightsProvider,
       });
 
       const dateStamp = new Date().toISOString().slice(0, 10);
+      const filterSlug = (primaryClient || 'filtered')
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .slice(0, 40);
       const attachments = [
-        // Full-page PDF first (primary deliverable for “whole page”)
-        ...(pdf
+        ...(dashPdf
           ? [
               {
-                filename: `market-vantage-dashboard-${dateStamp}.pdf`,
-                content: pdf,
+                filename: `market-vantage-dashboard-${filterSlug}-${dateStamp}.pdf`,
+                content: dashPdf,
+                contentType: 'application/pdf' as const,
+              },
+            ]
+          : []),
+        ...(threadsPdf
+          ? [
+              {
+                filename: `market-vantage-threads-${filterSlug}-${dateStamp}.pdf`,
+                content: threadsPdf,
                 contentType: 'application/pdf' as const,
               },
             ]
@@ -457,7 +518,7 @@ export async function processAlertDigests(opts?: {
 
       emailsSent += 1;
       console.log(
-        `[alerts] Event alert → ${sub.email} (${matches.length} new thread(s), clients: ${clientsInvolved.join(', ')})`,
+        `[alerts] Event alert → ${sub.email} (${matches.length} match(es), filters: ${filterLabel}, insights=${insightsProvider})`,
       );
     } catch (e: any) {
       errors.push(`${sub.email}: ${e?.message || 'send failed'}`);
@@ -493,6 +554,9 @@ function buildEventAlertEmail(opts: {
   manualSend?: boolean;
   exactSnapshot?: boolean;
   snapshotLabel?: string;
+  filterLabel?: string;
+  insights?: string;
+  insightsProvider?: 'xai' | 'rules';
 }): { subject: string; html: string; text: string } {
   const {
     matches,
@@ -505,44 +569,55 @@ function buildEventAlertEmail(opts: {
     manualSend,
     exactSnapshot,
     snapshotLabel,
+    filterLabel,
+    insights,
+    insightsProvider,
   } = opts;
   const n = matches.length;
   const multiClient = clientsInvolved.length > 1;
   const clientPhrase = multiClient
     ? clientsInvolved.slice(0, 4).join(', ') + (clientsInvolved.length > 4 ? '…' : '')
     : primaryClient;
+  const filtersShown = filterLabel || snapshotLabel || clientPhrase;
 
   const subject = exactSnapshot
-    ? `Market Vantage | Dashboard snapshot${snapshotLabel ? ` · ${snapshotLabel}` : ''}`
+    ? `Market Vantage | Intelligence brief · ${filtersShown}`
     : n === 0
-      ? `Market Vantage | Dashboard report (no new events in window)`
+      ? `Market Vantage | Quiet period · ${filtersShown}`
       : n === 1
-        ? `Market Vantage | New activity detected for ${primaryClient}`
+        ? `Market Vantage | New conversation · ${primaryClient}`
         : multiClient
-          ? `Market Vantage | ${n} new events across ${clientPhrase}`
-          : `Market Vantage | ${n} new events detected for ${primaryClient}`;
+          ? `Market Vantage | ${n} conversations · ${clientPhrase}`
+          : `Market Vantage | ${n} conversations · ${primaryClient}`;
 
-  const headline = exactSnapshot
-    ? 'Dashboard snapshot (exact view)'
-    : n === 0
-      ? 'Dashboard status report'
-      : 'New activity requires your attention';
+  const headline =
+    n === 0
+      ? 'Intelligence brief — no new activity'
+      : exactSnapshot
+        ? 'Intelligence brief'
+        : 'New activity requiring review';
 
-  const intro = exactSnapshot
-    ? `This email includes a <strong>full-page PDF</strong> and PNG of the Market Vantage dashboard
-       <strong>exactly as it was open</strong> when you clicked Send
-       ${snapshotLabel ? `(<em>${escapeHtml(snapshotLabel)}</em>)` : ''}.
-       Use the attachments as a record of that view, or reopen the same filters via the link below.`
-    : n === 0
-      ? `This is a <strong>manual status report</strong> you requested from Market Vantage. There were <strong>no new matching conversations</strong> in the recent lookback window for your filters. A live screenshot of the dashboard is attached for your review.`
-      : `We have detected <strong>${n} new public conversation${n === 1 ? '' : 's'}</strong>
-          matching your alert criteria
-          ${multiClient ? ` across <strong>${escapeHtml(clientPhrase)}</strong>` : ` for <strong>${escapeHtml(primaryClient)}</strong>`}.
-          Please review ${n === 1 ? 'this event' : 'these events'} at your earliest convenience.`;
+  const intro =
+    n === 0
+      ? `Please find your scheduled Market Vantage brief for the monitoring criteria below.
+          During this reporting period, <strong>no new public conversations</strong> met those criteria.
+          Supporting materials reflect <strong>only</strong> your selected scope.`
+      : exactSnapshot
+        ? `Please find your Market Vantage intelligence brief, prepared from the dashboard view you requested
+          ${snapshotLabel ? `(<em>${escapeHtml(snapshotLabel)}</em>)` : ''}.
+          Analysis and attachments are limited to your monitoring criteria.`
+        : `Please find your Market Vantage intelligence brief.
+          We identified <strong>${n} new public conversation${n === 1 ? '' : 's'}</strong>
+          within <strong>${escapeHtml(filtersShown)}</strong>
+          ${multiClient ? ` (notably ${escapeHtml(clientPhrase)})` : ''}.
+          Please review at your earliest convenience.`;
 
   const eventRows =
     n === 0
-      ? `<tr><td style="padding:14px 0;color:#5c5470;font-size:14px;line-height:1.5">No matching events in this period. Open the dashboard to browse the full dataset and adjust filters if needed.</td></tr>`
+      ? `<tr><td style="padding:14px 0;color:#5c5470;font-size:14px;line-height:1.55">
+          No conversations matched your monitoring criteria in this period.
+          You may open the live dashboard to confirm filters or extend the date range.
+        </td></tr>`
       : matches
           .slice(0, 8)
           .map((m, i) => {
@@ -553,16 +628,16 @@ function buildEventAlertEmail(opts: {
             });
             const excerpt = (m.text || '').replace(/\s+/g, ' ').trim().slice(0, 220);
             const link = m.url
-              ? `<a href="${escapeHtml(m.url)}" style="color:#3200BE;font-size:12px">View source thread</a>`
+              ? `<a href="${escapeHtml(m.url)}" style="color:#3200BE;font-size:12px">View source</a>`
               : '';
             return `
         <tr>
           <td style="padding:14px 0;border-bottom:1px solid #ebe6f5;vertical-align:top">
             <div style="font-size:11px;color:#5c5470;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:4px">
-              Event ${i + 1} · ${escapeHtml(m.client)} · ${escapeHtml(m.businessLineLabel)} · ${escapeHtml(m.source)}
+              ${i + 1} · ${escapeHtml(m.client)} · ${escapeHtml(m.businessLineLabel)} · ${escapeHtml(m.source)}
             </div>
             <div style="font-size:15px;font-weight:600;color:#1a0b3d;margin-bottom:4px">${escapeHtml(title)}</div>
-            <div style="font-size:12px;color:#5c5470;margin-bottom:6px">${escapeHtml(when)} · Sentiment: ${escapeHtml(m.sentiment)} · ${escapeHtml(m.pillar)}</div>
+            <div style="font-size:12px;color:#5c5470;margin-bottom:6px">${escapeHtml(when)} · ${escapeHtml(m.sentiment)} · ${escapeHtml(m.pillar)}</div>
             ${excerpt ? `<div style="font-size:13px;color:#3d3555;line-height:1.45;margin-bottom:6px">${escapeHtml(excerpt)}${(m.text || '').length > 220 ? '…' : ''}</div>` : ''}
             ${link}
           </td>
@@ -572,14 +647,21 @@ function buildEventAlertEmail(opts: {
 
   const moreNote =
     n > 8
-      ? `<p style="font-size:13px;color:#5c5470;margin-top:8px">Plus ${n - 8} additional matching event${n - 8 === 1 ? '' : 's'} — open the dashboard for the full list.</p>`
+      ? `<p style="font-size:13px;color:#5c5470;margin-top:8px">${n - 8} additional conversation${n - 8 === 1 ? '' : 's'} available in the live dashboard.</p>`
       : '';
 
   const footerNote = exactSnapshot
-    ? 'You requested this email using “Send email now” — capture reflects the filters open on your screen at send time.'
+    ? 'This brief was generated at your request and reflects the filters applied at the time of send.'
     : manualSend
-      ? 'You requested this email using “Send email now” in Market Vantage.'
-      : 'Only new activity since your last automatic notification is included.';
+      ? 'This brief was generated at your request from Market Vantage.'
+      : 'This brief includes only activity since your previous automatic notification, within your selected criteria.';
+
+  const attachmentNote =
+    shotCount > 0
+      ? `Enclosed: ${hasPdf ? 'PDF report(s) and ' : ''}${shotCount} dashboard image${shotCount === 1 ? '' : 's'} scoped to your criteria${
+          n > 0 ? ', together with a conversation listing where applicable' : ''
+        }.`
+      : 'A live dashboard link is provided below. Visual capture was unavailable for this send.';
 
   const html = `
 <!DOCTYPE html>
@@ -587,60 +669,68 @@ function buildEventAlertEmail(opts: {
 <body style="margin:0;padding:0;background:#f6f4fb">
   <div style="font-family:Georgia,'Times New Roman',serif;max-width:600px;margin:0 auto;padding:28px 16px">
     <div style="background:#ffffff;border-radius:12px;border:1px solid #e8e4f0;overflow:hidden">
-      <div style="background:#3200BE;padding:20px 28px">
-        <div style="font-family:system-ui,-apple-system,sans-serif;color:#ffffff;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.9">Market Vantage</div>
-        <div style="font-family:system-ui,-apple-system,sans-serif;color:#ffffff;font-size:20px;font-weight:600;margin-top:4px">${headline}</div>
+      <div style="background:#3200BE;padding:22px 28px">
+        <div style="font-family:system-ui,-apple-system,sans-serif;color:#ffffff;font-size:12px;letter-spacing:0.1em;text-transform:uppercase;opacity:0.9">Market Vantage</div>
+        <div style="font-family:system-ui,-apple-system,sans-serif;color:#ffffff;font-size:20px;font-weight:600;margin-top:6px;letter-spacing:-0.01em">${headline}</div>
       </div>
       <div style="padding:28px;color:#1a0b3d;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-        <p style="margin:0 0 14px;font-size:15px;line-height:1.55">
-          Hello,
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.6">
+          Dear colleague,
         </p>
-        <p style="margin:0 0 14px;font-size:15px;line-height:1.55">
+        <p style="margin:0 0 16px;font-size:15px;line-height:1.6">
           ${intro}
         </p>
-        <p style="margin:0 0 18px;font-size:15px;line-height:1.55;color:#3d3555">
-          ${
-            exactSnapshot
-              ? 'Attached: <strong>full-page PDF</strong> of the entire dashboard scroll, plus a PNG of the same capture.'
-              : `A live screenshot of the Market Vantage dashboard${n > 0 ? ' — filtered to this context —' : ''} is attached
-          so you can assess the situation quickly.`
-          }
-          You may also open the interactive dashboard using the button below.
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;background:#faf8fc;border:1px solid #ebe6f5;border-radius:8px">
+          <tr>
+            <td style="padding:14px 16px">
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#3200BE;margin-bottom:6px">Monitoring criteria</div>
+              <div style="font-size:14px;line-height:1.5;color:#1a0b3d">${escapeHtml(filtersShown)}</div>
+            </td>
+          </tr>
+        </table>
+
+        ${
+          insights
+            ? `<div style="margin:0 0 22px;padding:18px 18px;background:#f6f2ff;border:1px solid #e0d6f7;border-radius:10px">
+          <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#3200BE;margin-bottom:10px">
+            Executive insights${insightsProvider === 'xai' ? '' : ''}
+          </div>
+          <div style="font-size:14px;line-height:1.6;color:#1a0b3d;white-space:pre-wrap">${escapeHtml(insights)}</div>
+        </div>`
+            : ''
+        }
+
+        <p style="margin:0 0 18px;font-size:14px;line-height:1.55;color:#3d3555">
+          ${escapeHtml(attachmentNote)}
         </p>
 
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 20px">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 24px">
           <tr>
             <td>
               <a href="${escapeHtml(dashUrl)}"
                  style="display:inline-block;background:#3200BE;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 22px;border-radius:8px">
-                Open dashboard · Review
+                Open live dashboard
               </a>
             </td>
           </tr>
         </table>
 
-        <div style="font-size:12px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#3200BE;margin-bottom:4px">
-          ${n === 0 ? 'Status' : `Event detail${n === 1 ? '' : 's'}`}
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#3200BE;margin-bottom:6px">
+          ${n === 0 ? 'Activity summary' : `Conversations in scope${n === 1 ? '' : ` (${Math.min(n, 8)} of ${n} shown)`}`}
         </div>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
           ${eventRows}
         </table>
         ${moreNote}
 
-        <p style="margin:22px 0 0;font-size:13px;line-height:1.5;color:#5c5470">
-          ${
-            shotCount > 0
-              ? `Attachments: ${hasPdf ? 'full-page PDF + ' : ''}${shotCount} full-page PNG screenshot${shotCount === 1 ? '' : 's'}.`
-              : 'Open the dashboard link above for the live view (screenshot/PDF capture was unavailable on this send).'
-          }
-        </p>
-        <p style="margin:10px 0 0;font-size:12px;line-height:1.5;color:#8a8299;word-break:break-all">
-          Direct link:<br/>
+        <p style="margin:22px 0 0;font-size:12px;line-height:1.5;color:#8a8299;word-break:break-all">
+          Dashboard link<br/>
           <a href="${escapeHtml(dashUrl)}" style="color:#3200BE">${escapeHtml(dashUrl)}</a>
         </p>
       </div>
-      <div style="padding:16px 28px;background:#faf8fc;border-top:1px solid #ebe6f5;font-family:system-ui,sans-serif;font-size:11px;color:#8a8299;line-height:1.5">
-        You are receiving this because you enrolled in Market Vantage event alerts for matching clients and business lines.
+      <div style="padding:16px 28px;background:#faf8fc;border-top:1px solid #ebe6f5;font-family:system-ui,sans-serif;font-size:11px;color:#8a8299;line-height:1.55">
+        You are receiving this message because you are enrolled in Market Vantage alerts for the monitoring criteria above.
         ${footerNote}
         <a href="${escapeHtml(unsubUrl)}" style="color:#3200BE">Unsubscribe</a>
       </div>
@@ -650,26 +740,32 @@ function buildEventAlertEmail(opts: {
 </html>`;
 
   const textLines = [
-    `Market Vantage — ${headline}`,
+    'Market Vantage',
+    headline,
+    '',
+    'Dear colleague,',
     '',
     n === 0
-      ? 'Manual status report: no new matching conversations in the lookback window. Live dashboard screenshot attached.'
-      : `We have detected ${n} new public conversation${n === 1 ? '' : 's'} matching your alert criteria for ${clientPhrase}. Please review at your earliest convenience.`,
+      ? `Please find your Market Vantage brief for the criteria below. No new public conversations met those criteria during this reporting period.`
+      : `Please find your Market Vantage intelligence brief. ${n} new conversation${n === 1 ? '' : 's'} met your monitoring criteria.`,
     '',
-    `Dashboard: ${dashUrl}`,
+    `Monitoring criteria: ${filtersShown}`,
+    '',
+    ...(insights ? ['Executive insights', insights, ''] : []),
+    attachmentNote,
+    '',
+    `Live dashboard: ${dashUrl}`,
     '',
     ...(n
       ? [
-          'Events:',
+          'Conversations in scope:',
           ...matches.slice(0, 8).map((m, i) => {
             const title = m.title || m.text.slice(0, 80) || 'Untitled';
             return `${i + 1}. [${m.client} · ${m.businessLineLabel} · ${m.source}] ${title}\n   ${m.url || ''}`.trim();
           }),
           '',
         ]
-      : []),
-    `A live screenshot of the dashboard is attached (${shotCount} PNG${shotCount === 1 ? '' : 's'}${hasPdf ? ' + PDF' : ''}).`,
-    '',
+      : ['Activity summary: no conversations matched your criteria in this period.', '']),
     `Unsubscribe: ${unsubUrl}`,
   ];
 

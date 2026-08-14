@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { generateDraftReply, type DraftReplyInput, type DraftReplyMode } from '@/lib/draftReply';
+import { getRequestPermissions, REPLY_FORBIDDEN_MESSAGE } from '@/lib/roles';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -9,9 +10,21 @@ export const maxDuration = 60;
  * mode: "generate" (default) | "rewrite"
  * - generate: draft from thread; pass previousReply + variation for regenerate
  * - rewrite: polish draftText the user wrote/edited
+ * Requires session + responder/admin role.
  */
 export async function POST(request: Request) {
   try {
+    const perms = await getRequestPermissions(request);
+    if (!perms) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+    if (!perms.canReply) {
+      return NextResponse.json(
+        { success: false, error: REPLY_FORBIDDEN_MESSAGE, code: 'REPLY_FORBIDDEN' },
+        { status: 403 },
+      );
+    }
+
     const body = (await request.json().catch(() => null)) as
       | (DraftReplyInput & { mode?: string })
       | null;
