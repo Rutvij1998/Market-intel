@@ -9,11 +9,19 @@ export const SESSION_COOKIE = 'mv_session';
 const SESSION_DAYS = 14;
 
 function authSecret(): string {
-  return (
+  const secret = (
     process.env.AUTH_SECRET ||
     process.env.CRON_SECRET ||
-    'market-vantage-dev-secret-change-in-prod'
-  );
+    ''
+  ).trim();
+  if (secret) return secret;
+  // Never ship a shared default secret — production must set AUTH_SECRET.
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL === '1') {
+    throw new Error(
+      'AUTH_SECRET (or CRON_SECRET) must be set in production. Refusing weak default.',
+    );
+  }
+  return 'market-vantage-local-dev-only-not-for-prod';
 }
 
 function toBase64Url(bytes: ArrayBuffer | Uint8Array): string {

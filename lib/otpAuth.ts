@@ -43,13 +43,24 @@ export async function hashOtp(otp: string, email: string, nonce: string): Promis
 }
 
 async function importOtpKey(): Promise<CryptoKey> {
-  const secret =
+  const secret = (
     process.env.AUTH_SECRET ||
     process.env.CRON_SECRET ||
-    'market-vantage-dev-secret-change-in-prod';
+    ''
+  ).trim();
+  const resolved =
+    secret ||
+    (process.env.NODE_ENV === 'production' || process.env.VERCEL === '1'
+      ? ''
+      : 'market-vantage-local-dev-only-not-for-prod');
+  if (!resolved) {
+    throw new Error(
+      'AUTH_SECRET (or CRON_SECRET) must be set in production. Refusing weak default.',
+    );
+  }
   return crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(`otp:${secret}`),
+    new TextEncoder().encode(`otp:${resolved}`),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign'],
