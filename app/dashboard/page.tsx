@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 
 import { Button } from "@/components/ui/button";
 import { HealthGauge } from "@/components/dashboard/HealthGauge";
+import { ListeningLoader } from "@/components/dashboard/ListeningLoader";
 import type { ClassifiedMention, Pillar } from "@/lib/classify";
 import { supabase } from "@/lib/supabase";
 import {
@@ -282,6 +283,8 @@ export default function MarketIntelDashboard() {
   const [mentions, setMentions] = useState<ClassifiedMention[]>([]);
   /** True after first Supabase load finishes (success or empty) — used by alert screenshots */
   const [dataReady, setDataReady] = useState(false);
+  /** Headless PDF capture — skip the first-load overlay */
+  const [isScreenshot, setIsScreenshot] = useState(false);
   const [isIngesting, setIsIngesting] = useState(false);
   const [lastIngestInfo, setLastIngestInfo] = useState<{reddit?: number; pissedconsumer?: number; bbb?: number} | null>(null);
   const [dbLoadMeta, setDbLoadMeta] = useState<{ raw: number; shown: number } | null>(null);
@@ -575,6 +578,7 @@ export default function MarketIntelDashboard() {
     const tab = params.get('tab');
     const range = params.get('range');
     const screenshotMode = params.get('screenshot') === '1';
+    setIsScreenshot(screenshotMode);
     // exact=1 → honor filters as sent (user snapshot); otherwise auto-alert defaults
     const exactMode = params.get('exact') === '1';
     // admin=1 → show Sync (manual ingest). Default UI is read-only + Refresh from DB.
@@ -3420,6 +3424,7 @@ export default function MarketIntelDashboard() {
         </div>
         );
       })()}
+      <ListeningLoader active={!dataReady && !isScreenshot} />
     </div>
   );
 }

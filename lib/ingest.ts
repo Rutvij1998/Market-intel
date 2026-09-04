@@ -7,7 +7,7 @@ import {
 import { scrapePissedConsumer, scrapeLikewizeBBB, scrapeAsurionBBB } from '@/lib/scrapers';
 import { classifyWithGrok, ClassifiedMention } from '@/lib/classify';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isElectronicDeviceProtection, detectCompany, normalizeMentionSource, dedupeMentions, mentionDedupKey, mentionsAsurion } from '@/lib/utils';
+import { isElectronicDeviceProtection, isLikewizeRelevant, hasBoostLikewizeClaimSignal, detectCompany, normalizeMentionSource, dedupeMentions, mentionDedupKey, mentionsAsurion } from '@/lib/utils';
 import { detectOfficialSupportReply, toRedditMentionId, ASURION_OFFICIAL_ACCOUNT } from '@/lib/officialSupport';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -532,6 +532,18 @@ export async function runIngestion({
       isAsurionBBB ||
       raw.company === 'Asurion';
     const isDevice = isElectronicDeviceProtection(haystack);
+    const isBoostLikewizeDp =
+      !isAsurionAll &&
+      (/\b(boost\s*mobile|boostmobile|boost\s*infinite|boost\s*protect)\b/i.test(haystack) ||
+        String((raw as any).client || '').toLowerCase().includes('boost') ||
+        /boostmobile/i.test(String((raw as any).subreddit || ''))) &&
+      hasBoostLikewizeClaimSignal(haystack);
+    const isSamsungLikewize =
+      !isAsurionAll &&
+      isLikewizeRelevant({ text: haystack }) &&
+      (/\bsamsung\b|\bgalaxy\b|\bgtp\b/i.test(haystack) ||
+        String((raw as any).client || '').toLowerCase() === 'samsung' ||
+        /samsung|galaxy/i.test(String((raw as any).subreddit || '')));
 
     let classification;
     try {
@@ -544,7 +556,7 @@ export async function runIngestion({
       };
     }
 
-    if (isPissedConsumer || isLikewizeBBB) {
+    if (isPissedConsumer || isLikewizeBBB || isBoostLikewizeDp || isSamsungLikewize) {
       classification = {
         ...classification,
         company: 'Likewize',
@@ -563,18 +575,20 @@ export async function runIngestion({
       };
     }
 
-    // Final relevance gate (PissedConsumer + BBB + Asurion always kept)
+    // Final relevance gate (PissedConsumer + BBB + Asurion + Boost Protect always kept)
     if (
       !isPissedConsumer &&
       !isBBB &&
       !isAsurionAll &&
+      !isBoostLikewizeDp &&
+      !isSamsungLikewize &&
       (classification.is_relevant === false || classification.product_type === 'other')
     ) {
       console.log(`[Ingest] Skipping after classify (non-device): ${raw.id}`);
       continue;
     }
 
-    const finalCompany = isPissedConsumer || isLikewizeBBB
+    const finalCompany = isPissedConsumer || isLikewizeBBB || isBoostLikewizeDp || isSamsungLikewize
       ? 'Likewize'
       : isAsurionAll
         ? 'Asurion'

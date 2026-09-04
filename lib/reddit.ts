@@ -1,5 +1,5 @@
 import Snoowrap from 'snoowrap';
-import { isElectronicDeviceProtection, isLikewizeRelevant, detectCompany, mentionsAsurion } from './utils';
+import { isElectronicDeviceProtection, isLikewizeRelevant, detectCompany, mentionsAsurion, hasBoostLikewizeClaimSignal } from './utils';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -130,12 +130,12 @@ const PARTNER_SUBS = [
 
 // These are the subs we actively search in every run. Put high-value client communities first.
 const SEARCH_SUBS = [
-  'rogers', 'bell', 'telus', 'fido', 'koodo', 'freedommobile', 'shaw',   // Canadian telcos - user specifically wants more from Rogers etc.
+  'rogers', 'bell', 'telus', 'fido', 'koodo', 'freedommobile', 'shaw',
   'Newegg', 'bestbuy', 'samsung', 'target', 'verizon', 'att', 'tmobile',
   'pcmasterrace', 'techsupport', 'personalfinance', 'buildapc', 'laptops'
 ];
 
-const MAX_SUB_SEARCHES = 15; // Increased to get more volume from client subs like Rogers while still respecting rate limits.
+const MAX_SUB_SEARCHES = 15;
 
 function detectClientFromSubreddit(sub: string): string | undefined {
   const lower = sub.toLowerCase();
@@ -175,7 +175,248 @@ function shouldKeepRedditMention(text: string): boolean {
   return isElectronicDeviceProtection(text);
 }
 
+/** True Boost Mobile / Boost Protect context — not "boost" as in AMD/politics. */
+function isBoostMobileContext(text: string, subreddit?: string): boolean {
+  if (/boostmobile/i.test(subreddit || '')) return true;
+  return /\bboost\s*mobile\b|boostmobile|\bboost\s*infinite\b|\bboost\s*protect\b/i.test(text || '');
+}
+
+/** Samsung GTP / Care+ / Galaxy trade-in — Likewize operates the portal. */
+function isSamsungGtpContext(text: string, subreddit?: string): boolean {
+  if (/samsung|galaxy/i.test(subreddit || '')) return true;
+  return /\bsamsung\b|\bgalaxy\b|\bgtp\b|\bs2[2-9]\b/i.test(text || '');
+}
+
 export type RedditTimeFilter = 'hour' | 'day' | 'week' | 'month' | 'year' | 'all';
+
+/** Boost Mobile is a major Likewize DP client (Boost Protect). Search r/BoostMobile + global. */
+async function collectBoostMobileMentions(
+  client: any,
+  results: RawMention[],
+  timeFilter: RedditTimeFilter,
+  isRecentOnly: boolean,
+) {
+  const subQueries = [
+    'likewize',
+    'claim OR claims OR "file a claim" OR "insurance claim"',
+  ];
+  const globalQueries = [
+    'likewize ("boost mobile" OR boostmobile OR "boost infinite" OR "boost protect")',
+    '("boost mobile" OR boostmobile OR "boost infinite") (likewize OR claim OR claims)',
+  ];
+
+  console.log('[Reddit] [BOOST] Collecting Boost Mobile / Boost Protect / Likewize mentions...');
+
+  for (const q of subQueries) {
+    await waitForRateLimitIfNeeded(client, 1000);
+    try {
+      console.log(`[Reddit] [BOOST] r/boostmobile: ${q}`);
+      let listing = await client.getSubreddit('boostmobile').search({
+        query: q,
+        sort: 'new',
+        time: timeFilter,
+        limit: isRecentOnly ? 40 : 75,
+      });
+      let combined: any[] = [...listing];
+      await waitForRateLimitIfNeeded(client, 500);
+      if (!isRecentOnly) {
+        try {
+          listing = await listing.fetchMore({ amount: 50 });
+          if (listing?.length) combined = combined.concat(listing);
+        } catch {}
+      }
+      const unique = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(
+        0,
+        isRecentOnly ? 40 : 100,
+      );
+      let fullCount = 0;
+      for (const post of unique) {
+        const textForCheck = haystackFromPost(post);
+        const sub = post.subreddit?.display_name || 'boostmobile';
+        if (!isBoostMobileContext(textForCheck, sub)) continue;
+        if (!hasBoostLikewizeClaimSignal(textForCheck)) continue;
+        const doFull = fullCount < (isRecentOnly ? 15 : 40);
+        await processSubmission(client, post, results, 'Boost Mobile', doFull);
+        if (doFull) {
+          fullCount++;
+          await waitForRateLimitIfNeeded(client, 400);
+        }
+      }
+    } catch (e: any) {
+      const msg = (e?.message || '').toLowerCase();
+      if (msg.includes('ratelimit')) {
+        console.warn('[Reddit] [BOOST] Rate limit on r/boostmobile');
+        break;
+      }
+      console.log(`[Reddit] [BOOST] non-fatal r/boostmobile: ${e?.message || e}`);
+    }
+  }
+
+  for (const q of globalQueries) {
+    await waitForRateLimitIfNeeded(client, 1100);
+    try {
+      console.log(`[Reddit] [BOOST] global: ${q}`);
+      let listing = await client.search({
+        query: q,
+        sort: 'new',
+        time: timeFilter,
+        limit: isRecentOnly ? 40 : 70,
+      });
+      let combined: any[] = [...listing];
+      await waitForRateLimitIfNeeded(client, 600);
+      if (!isRecentOnly) {
+        try {
+          listing = await listing.fetchMore({ amount: 40 });
+          if (listing?.length) combined = combined.concat(listing);
+        } catch {}
+      }
+      const unique = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(
+        0,
+        isRecentOnly ? 40 : 80,
+      );
+      let fullCount = 0;
+      for (const post of unique) {
+        const textForCheck = haystackFromPost(post);
+        const sub = post.subreddit?.display_name || '';
+        if (!isBoostMobileContext(textForCheck, sub)) continue;
+        if (!hasBoostLikewizeClaimSignal(textForCheck)) continue;
+        const doFull = fullCount < (isRecentOnly ? 12 : 30);
+        await processSubmission(client, post, results, 'Boost Mobile', doFull);
+        if (doFull) {
+          fullCount++;
+          await waitForRateLimitIfNeeded(client, 400);
+        }
+      }
+    } catch (e: any) {
+      if ((e?.message || '').toLowerCase().includes('ratelimit')) {
+        console.warn('[Reddit] [BOOST] Rate limit on global Boost query');
+      } else {
+        console.log(`[Reddit] [BOOST] non-fatal global: ${e?.message || e}`);
+      }
+    }
+  }
+
+  const boostKept = results.filter((m) => (m.client || '').toLowerCase().includes('boost')).length;
+  console.log(`[Reddit] [BOOST] Tagged ${boostKept} Boost Mobile mentions so far`);
+}
+
+const SAMSUNG_GTP_SUBS = [
+  'samsung',
+  'samsunggalaxy',
+  'SamsungHelp',
+  'GalaxyS23',
+  'GalaxyS24',
+  'GalaxyS25',
+  'GalaxyS25Ultra',
+  'GalaxyFold',
+  'GalaxyWatch',
+];
+
+/** Samsung GTP portal / Care+ / trade-in — keep only posts that say Likewize. */
+async function collectSamsungGtpMentions(
+  client: any,
+  results: RawMention[],
+  timeFilter: RedditTimeFilter,
+  isRecentOnly: boolean,
+) {
+  console.log('[Reddit] [SAMSUNG-GTP] Collecting Likewize Samsung / GTP / trade-in mentions...');
+
+  for (const sub of SAMSUNG_GTP_SUBS) {
+    await waitForRateLimitIfNeeded(client, 900);
+    try {
+      console.log(`[Reddit] [SAMSUNG-GTP] r/${sub}: likewize`);
+      const listing = await client.getSubreddit(sub).search({
+        query: 'likewize',
+        sort: 'new',
+        time: timeFilter,
+        limit: isRecentOnly ? 25 : 50,
+      });
+      const unique = Array.from(new Map([...listing].map((p: any) => [p.id, p])).values()).slice(
+        0,
+        isRecentOnly ? 25 : 50,
+      );
+      let fullCount = 0;
+      for (const post of unique) {
+        const textForCheck = haystackFromPost(post);
+        const subName = post.subreddit?.display_name || sub;
+        if (!isSamsungGtpContext(textForCheck, subName)) continue;
+        if (!isLikewizeRelevant({ text: textForCheck })) continue;
+        const doFull = fullCount < (isRecentOnly ? 8 : 20);
+        await processSubmission(client, post, results, 'Samsung', doFull);
+        if (doFull) {
+          fullCount++;
+          await waitForRateLimitIfNeeded(client, 400);
+        }
+      }
+    } catch (e: any) {
+      const msg = (e?.message || '').toLowerCase();
+      if (msg.includes('ratelimit')) {
+        console.warn('[Reddit] [SAMSUNG-GTP] Rate limit');
+        break;
+      }
+      console.log(`[Reddit] [SAMSUNG-GTP] non-fatal r/${sub}: ${e?.message || e}`);
+    }
+  }
+
+  const globalQueries = [
+    'likewize (samsung OR galaxy OR GTP)',
+    'likewize (samsung OR galaxy) ("trade-in" OR tradein OR "trade in" OR repair OR battery OR claim)',
+  ];
+  for (const q of globalQueries) {
+    await waitForRateLimitIfNeeded(client, 1100);
+    try {
+      console.log(`[Reddit] [SAMSUNG-GTP] global: ${q}`);
+      let listing = await client.search({
+        query: q,
+        sort: 'new',
+        time: timeFilter,
+        limit: isRecentOnly ? 30 : 60,
+      });
+      let combined: any[] = [...listing];
+      if (!isRecentOnly) {
+        try {
+          await waitForRateLimitIfNeeded(client, 500);
+          listing = await listing.fetchMore({ amount: 30 });
+          if (listing?.length) combined = combined.concat(listing);
+        } catch {}
+      }
+      const unique = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(
+        0,
+        isRecentOnly ? 30 : 70,
+      );
+      let fullCount = 0;
+      for (const post of unique) {
+        const textForCheck = haystackFromPost(post);
+        const subName = post.subreddit?.display_name || '';
+        if (/boostmobile|fido|freedommobile|rogers|legaladvice/i.test(subName)) continue;
+        if (!isSamsungGtpContext(textForCheck, subName)) continue;
+        if (!isLikewizeRelevant({ text: textForCheck })) continue;
+        const samsungSub = /samsung|galaxy/i.test(subName);
+        if (
+          !samsungSub &&
+          !/\bgtp\b|\btrade[\s-]?in\b/i.test(textForCheck)
+        ) {
+          continue;
+        }
+        const doFull = fullCount < (isRecentOnly ? 10 : 25);
+        await processSubmission(client, post, results, 'Samsung', doFull);
+        if (doFull) {
+          fullCount++;
+          await waitForRateLimitIfNeeded(client, 400);
+        }
+      }
+    } catch (e: any) {
+      if ((e?.message || '').toLowerCase().includes('ratelimit')) {
+        console.warn('[Reddit] [SAMSUNG-GTP] Rate limit on global');
+      } else {
+        console.log(`[Reddit] [SAMSUNG-GTP] non-fatal global: ${e?.message || e}`);
+      }
+    }
+  }
+
+  const n = results.filter((m) => (m.client || '').toLowerCase() === 'samsung').length;
+  console.log(`[Reddit] [SAMSUNG-GTP] Tagged ${n} Samsung / GTP mentions so far`);
+}
 
 export async function fetchDeviceProtectionMentions(
   limit = 250,
@@ -195,6 +436,13 @@ export async function fetchDeviceProtectionMentions(
     console.log(
       `[Reddit] Starting collection (time=${timeFilter}): Likewize/Allstate/SquareTrade = electronic device protection; Asurion = ALL Reddit mentions (no device filter).`,
     );
+
+    // ---------------------------------------------------------------
+    // 0a. BOOST MOBILE — large DP client (Boost Protect / Likewize).
+    //     Run before the heavy Asurion sweep so rate limits don't drop this account.
+    // ---------------------------------------------------------------
+    await collectBoostMobileMentions(client, results, timeFilter, isRecentOnly);
+    await collectSamsungGtpMentions(client, results, timeFilter, isRecentOnly);
 
     // ---------------------------------------------------------------
     // 0. ASURION — unrestricted. Pull all Reddit posts mentioning Asurion
@@ -306,6 +554,8 @@ export async function fetchDeviceProtectionMentions(
     // ---------------------------------------------------------------
     const globalQueries = [
       'likewize (phone OR device OR "protection plan" OR warranty OR insurance) -health -auto -car -home -pet -travel',
+      'likewize ("boost mobile" OR boostmobile OR "boost infinite" OR "boost protect")',
+      'likewize (samsung OR galaxy OR GTP OR "trade-in" OR tradein)',
       'squaretrade (phone OR device OR gadget OR electronics) ("protection plan" OR warranty OR insurance) -health -auto -car -home -pet -travel',
       'allstate (phone OR device OR "protection plan" OR "device protection") (warranty OR insurance OR claim OR replacement) -health -auto -car -home -pet -travel',
       '"protection plan" (phone OR smartphone OR gadget OR "electronics" OR tablet OR laptop) (squaretrade OR likewize OR allstate) -health -auto -car -home -pet',
@@ -335,7 +585,7 @@ export async function fetchDeviceProtectionMentions(
           // Asurion always kept; others need device-protection relevance
           if (!shouldKeepRedditMention(textForCheck)) continue;
 
-          const hasStrong = /likewize|asurion|squaretrade|protection plan|phone insurance/i.test(textForCheck);
+          const hasStrong = /likewize|asurion|squaretrade|boost protect|protection plan|phone insurance/i.test(textForCheck);
           const isTargetCompany = /asurion|likewize/i.test(textForCheck);
           const doFull = !!( (hasStrong || isTargetCompany) && fullCount < MAX_FULL );
           await processSubmission(client, post, results, undefined, doFull);
@@ -350,8 +600,8 @@ export async function fetchDeviceProtectionMentions(
     const subsToSearch = SEARCH_SUBS.slice(0, MAX_SUB_SEARCHES);
     console.log(`[Reddit] Searching ${subsToSearch.length} client/retailer subs for Likewize/device protection + Asurion...`);
 
-    const broadSubQuery = '(likewize OR asurion OR "protection plan" OR "phone insurance" OR "device protection" OR allstate) (phone OR device OR claim OR replacement OR warranty OR insurance OR home OR auto)';
-    const protectionSubQuery = '"protection plan" OR "phone insurance" OR "device protection" OR "accidental damage" OR asurion';
+    const broadSubQuery = '(likewize OR asurion OR "boost protect" OR "protection plan" OR "phone insurance" OR "device protection" OR allstate) (phone OR device OR claim OR replacement OR warranty OR insurance OR home OR auto)';
+    const protectionSubQuery = '"protection plan" OR "phone insurance" OR "device protection" OR "boost protect" OR "accidental damage" OR asurion';
 
     for (const sub of subsToSearch) {
       await waitForRateLimitIfNeeded(client, 1000);
@@ -383,7 +633,7 @@ export async function fetchDeviceProtectionMentions(
             if (!shouldKeepRedditMention(textForCheck)) continue;
 
             const textLower = textForCheck.toLowerCase();
-            const hasKeyword = /likewize|asurion|squaretrade|allstate|protection plan|phone insurance|device protection/i.test(textLower);
+            const hasKeyword = /likewize|asurion|squaretrade|allstate|boost protect|protection plan|phone insurance|device protection/i.test(textLower);
             const hasPlanLang = /protection|warranty|insurance|claim|replacement/i.test(textLower);
             const isTargetCompany = /asurion|likewize/i.test(textLower);
             const doFull = !!((hasKeyword || (clientName && hasPlanLang) || isTargetCompany) && fullCount < MAX_FULL_PER);
@@ -429,6 +679,51 @@ export async function fetchDeviceProtectionMentions(
 
 // Back-compat alias (some code may still call the old name)
 export const fetchLikewizeMentions = fetchDeviceProtectionMentions;
+
+/** Boost-only Reddit pull (Boost Protect / Likewize DP). Used by dedicated ingest. */
+export async function fetchBoostMobileMentions(
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit] [BOOST] No client — cannot fetch Boost Mobile mentions');
+    return [];
+  }
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+  const results: RawMention[] = [];
+  await collectBoostMobileMentions(client, results, timeFilter, isRecentOnly);
+  const unique = Array.from(new Map(results.map((m) => [m.id, m])).values());
+  const kept = unique.filter((m) => {
+    const hay = `${m.text || ''} ${m.title || ''}`;
+    return hasBoostLikewizeClaimSignal(hay);
+  });
+  console.log(`[Reddit] [BOOST] fetchBoostMobileMentions kept ${kept.length} / ${unique.length}`);
+  return kept;
+}
+
+/** Samsung GTP / Galaxy Care+ Reddit pull — Likewize in the post is required. */
+export async function fetchSamsungGtpMentions(
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit] [SAMSUNG-GTP] No client — cannot fetch');
+    return [];
+  }
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+  const results: RawMention[] = [];
+  await collectSamsungGtpMentions(client, results, timeFilter, isRecentOnly);
+  const unique = Array.from(new Map(results.map((m) => [m.id, m])).values());
+  const kept = unique.filter((m) => {
+    const hay = `${m.text || ''} ${m.title || ''}`;
+    const sub = m.subreddit || '';
+    return isSamsungGtpContext(hay, sub) && isLikewizeRelevant({ text: hay });
+  });
+  console.log(`[Reddit] [SAMSUNG-GTP] fetchSamsungGtpMentions kept ${kept.length} / ${unique.length}`);
+  return kept;
+}
 
 // Note: limit is the final cap returned to ingestion. We now fetch wider in client subs to surface more Rogers-style mentions.
 
@@ -510,6 +805,7 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
       created_at: new Date(submission.created_utc * 1000).toISOString(),
       subreddit: submission.subreddit?.display_name,
       client: client,
+      title: submission.title,
       full_thread: shouldExpand ? fullText : undefined,
       author: submission.author?.name || (post as any).author?.name,
     };
@@ -550,6 +846,7 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
       created_at: new Date(post.created_utc * 1000).toISOString(),
       subreddit: post.subreddit?.display_name,
       client: client,
+      title: post.title,
       author: (post as any).author?.name,
       comments: [],
     };
@@ -565,9 +862,12 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
 
 function detectClientFromText(text: string): string | undefined {
   const lower = text.toLowerCase();
+  if (/\bboost\s*mobile\b|boostmobile|\bboost\s*infinite\b|\bboost\s*protect\b/.test(lower)) {
+    return 'Boost Mobile';
+  }
   if (lower.includes('newegg')) return 'Newegg';
   if (lower.includes('best buy') || lower.includes('bestbuy')) return 'Best Buy';
-  if (lower.includes('samsung')) return 'Samsung';
+  if (/\bsamsung\b|\bgalaxy\b|\bgtp\b/.test(lower)) return 'Samsung';
   if (lower.includes('apple') || lower.includes('iphone')) return 'Apple';
   if (lower.includes('dell') || lower.includes('hp') || lower.includes('asus') || lower.includes('lenovo')) return 'PC Manufacturer';
   return undefined;

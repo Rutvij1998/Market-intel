@@ -24,7 +24,7 @@ const POSITIVE_DEVICE_KEYWORDS = [
   'screen protection', 'screen protector plan', 'accidental damage protection',
   'phone replacement plan', 'gadget warranty', 'electronics protection', 'tech protection',
   'device care', 'phone care plan', 'smartphone protection', 'tablet protection',
-  'laptop protection plan', 'computer warranty electronics'
+  'laptop protection plan', 'computer warranty electronics',
 ];
 
 const NEGATIVE_EXCLUSIONS = [
@@ -343,7 +343,7 @@ export function detectBusinessLine(m: {
 
   // Trade-In
   if (
-    /\btrade[\s-]?in\b|\btradein\b|\btrade\s+in\s+(value|offer|program|credit|phone|device)\b|\bexchange\s+(my\s+)?(phone|device)\b|\bupgrade\s+program\b|\bcarrier\s+upgrade\b/.test(
+    /\btrade[\s-]?in\b|\btradein\b|\bgtp\b|\bglobal\s+trade[\s-]?in\b|\btrade\s+in\s+(value|offer|program|credit|phone|device)\b|\bexchange\s+(my\s+)?(phone|device)\b|\bupgrade\s+program\b|\bcarrier\s+upgrade\b/.test(
       hay,
     )
   ) {
@@ -413,4 +413,21 @@ export function isLikewizeRelevant(item: {
     haystack.includes('like-wize') ||
     haystack.includes('likewise')
   );
+}
+
+/**
+ * Boost Mobile posts we keep: must say Likewize, or an actual insurance/DP claim.
+ * Not “they claim” / generic Boost billing.
+ */
+export function hasBoostLikewizeClaimSignal(text?: string | null): boolean {
+  const t = text || '';
+  if (/likewize|like[\s-]?wize|\blikewise\b|protect\.likewize/i.test(t)) return true;
+  if (
+    /\b(file[ds]?|filing|submit(?:ted|ting)?|open(?:ed)?|insurance)\s+claims?\b/i.test(t) ||
+    /\bclaims?\s+(denied|approved|rejected|filed|number|status|process|with|through)/i.test(t) ||
+    /\b(my|the|an?)\s+claims?\b/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
 }
