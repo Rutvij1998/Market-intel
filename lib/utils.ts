@@ -183,6 +183,9 @@ export function normalizeClientLabel(raw?: string | null): string {
 
   if (/newegg/.test(lower)) return 'Newegg';
   if (/best\s*buy|bestbuy/.test(lower)) return 'Best Buy';
+  if (/barclays/.test(lower)) return 'Barclays';
+  if (/nat\s*west|natwest/.test(lower)) return 'NatWest';
+  if (/\bvmo2\b|virgin\s*media|\bvirginmedia\b/.test(lower)) return 'VMO2';
   if (/samsung|galaxy/.test(lower)) return 'Samsung';
   if (/^apple$|iphone|ipad/.test(lower)) return 'Apple';
   if (/target/.test(lower)) return 'Target';
@@ -279,10 +282,14 @@ export const BUSINESS_LINE_LABELS: Record<BusinessLine, string> = {
 
 /** Clients that always map to a fixed product business line (Likewize). */
 const CLIENT_BUSINESS_LINE_RULES: Array<{ match: RegExp; line: BusinessLine }> = [
-  // Always Device Protection (carrier phone plans)
+  // Always Device Protection (carrier phone plans / UK bank gadget cover)
   { match: /boost\s*mobile|boostmobile/i, line: 'DP' },
   { match: /^rogers$|rogers\s/i, line: 'DP' },
   { match: /^fido$|fido\s/i, line: 'DP' },
+  { match: /barclays/i, line: 'DP' },
+  { match: /natwest|nat\s*west/i, line: 'DP' },
+  // VMO2 pull is device trade-in
+  { match: /vmo2|virgin\s*media/i, line: 'TradeIn' },
   // Always HomeTech (retail electronics / appliance channel)
   { match: /newegg/i, line: 'HomeTech' },
 ];
@@ -430,4 +437,70 @@ export function hasBoostLikewizeClaimSignal(text?: string | null): boolean {
     return true;
   }
   return false;
+}
+
+const PHONE_LIKE_TRADEIN_RE =
+  /\b(iphone|android|galaxy|pixel|smartphone|mobile\s*phone|cell\s*phone|phones?|tablet|ipad|galaxy\s*s\d|galaxy\s*z|galaxy\s*watch|apple\s*watch|smart\s*watch|trifold|\bfold\b)\b/i;
+const NON_DEVICE_TRADEIN_RE =
+  /\b(car|vehicle|van|motorbike|mortgage|house|property|fridge|refrigerator|dishwasher|washing\s+machine|washer|dryer|hvac|television|\btv\b|oled|qled)\b/i;
+const TRADEIN_RE = /\btrade[\s-]?in\b|\btradein\b|\brecycle\b|\bupgrade\s+(deal|offer|bonus|programme|program)\b/i;
+
+/** Phones / tablets / watches — not cars, TVs, or home appliances. */
+export function isDeviceOnlyTradeIn(text?: string | null): boolean {
+  const t = text || '';
+  if (!TRADEIN_RE.test(t)) return false;
+  const hasPhoneLike = PHONE_LIKE_TRADEIN_RE.test(t);
+  const hasGenericDevice = /\bdevice\b/i.test(t);
+  if (!hasPhoneLike && !hasGenericDevice) return false;
+  if (NON_DEVICE_TRADEIN_RE.test(t) && !hasPhoneLike) return false;
+  return true;
+}
+
+/** Brand name only — does not match the English word “likewise”. */
+export function isLikewizeBrand(text?: string | null): boolean {
+  return /likewize|like[\s-]?wize|protect\.likewize/i.test(text || '');
+}
+
+export function isBarclaysContext(text?: string | null, subreddit?: string | null): boolean {
+  if (/barclays/i.test(subreddit || '')) return true;
+  return /\bbarclays\b/i.test(text || '');
+}
+
+export function isNatwestContext(text?: string | null, subreddit?: string | null): boolean {
+  if (/natwest|nat\s*west/i.test(subreddit || '')) return true;
+  return /\bnat\s*west\b|\bnatwest\b/i.test(text || '');
+}
+
+export function isNatwestGadgetInsurance(text?: string | null): boolean {
+  const t = text || '';
+  return (
+    /\b(phone|gadget|mobile|device)\s+(insurance|protection|claim|cover)\b/i.test(t) ||
+    /\b(insurance|claim|cover).{0,50}(phone|iphone|samsung|gadget|mobile)\b/i.test(t) ||
+    /\b(iphone|samsung|galaxy|pixel).{0,40}(insurance|claim)\b/i.test(t)
+  );
+}
+
+export function isVmo2Context(text?: string | null, subreddit?: string | null): boolean {
+  if (/virginmedia|vmo2|^o2uk$/i.test(subreddit || '')) return true;
+  const t = text || '';
+  if (/\bvmo2\b|\bvirgin\s*media\s*o2\b|\bvirgin\s*media\b/i.test(t)) return true;
+  if (/\bo2\s*(recycle|trade[\s-]?in|upgrade|mobile|priority)\b/i.test(t)) return true;
+  return false;
+}
+
+export function isO2RecycleDeviceContext(text?: string | null, subreddit?: string | null): boolean {
+  const sub = subreddit || '';
+  if (/hfy|spacebasedf9|theplanetcrafter/i.test(sub)) return false;
+  const t = text || '';
+  if (/\bo2\s*recyclers?\b/i.test(t) && /game|patch|impact|fire/i.test(t)) return false;
+  if (/\bo2\s*recycle\b/i.test(t)) return true;
+  return isVmo2Context(t, sub) && isDeviceOnlyTradeIn(t);
+}
+
+export function isSamsungTradeInDeviceContext(text?: string | null, subreddit?: string | null): boolean {
+  const t = text || '';
+  const sub = subreddit || '';
+  const samsung =
+    /samsung|galaxy/i.test(sub) || /\bsamsung\b|\bgalaxy\b|\btrifold\b|\bfold\b/i.test(t);
+  return samsung && isDeviceOnlyTradeIn(t);
 }

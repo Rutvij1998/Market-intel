@@ -7,7 +7,23 @@ import {
 import { scrapePissedConsumer, scrapeLikewizeBBB, scrapeAsurionBBB } from '@/lib/scrapers';
 import { classifyWithGrok, ClassifiedMention } from '@/lib/classify';
 import { supabaseAdmin } from '@/lib/supabase';
-import { isElectronicDeviceProtection, isLikewizeRelevant, hasBoostLikewizeClaimSignal, detectCompany, normalizeMentionSource, dedupeMentions, mentionDedupKey, mentionsAsurion } from '@/lib/utils';
+import {
+  isElectronicDeviceProtection,
+  isLikewizeRelevant,
+  hasBoostLikewizeClaimSignal,
+  detectCompany,
+  normalizeMentionSource,
+  dedupeMentions,
+  mentionDedupKey,
+  mentionsAsurion,
+  isBarclaysContext,
+  isNatwestContext,
+  isVmo2Context,
+  isO2RecycleDeviceContext,
+  isSamsungTradeInDeviceContext,
+  isDeviceOnlyTradeIn,
+  isLikewizeBrand,
+} from '@/lib/utils';
 import { detectOfficialSupportReply, toRedditMentionId, ASURION_OFFICIAL_ACCOUNT } from '@/lib/officialSupport';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -544,6 +560,33 @@ export async function runIngestion({
       (/\bsamsung\b|\bgalaxy\b|\bgtp\b/i.test(haystack) ||
         String((raw as any).client || '').toLowerCase() === 'samsung' ||
         /samsung|galaxy/i.test(String((raw as any).subreddit || '')));
+    const clientLabel = String((raw as any).client || '');
+    const subLabel = String((raw as any).subreddit || '');
+    const isBarclaysLikewize =
+      !isAsurionAll &&
+      (isBarclaysContext(haystack, subLabel) || /barclays/i.test(clientLabel)) &&
+      isLikewizeBrand(haystack);
+    const isNatwestLikewize =
+      !isAsurionAll &&
+      (isNatwestContext(haystack, subLabel) || /natwest|nat\s*west/i.test(clientLabel)) &&
+      isLikewizeBrand(haystack);
+    const isVmo2TradeIn =
+      !isAsurionAll &&
+      isLikewizeBrand(haystack) &&
+      (isO2RecycleDeviceContext(haystack, subLabel) ||
+        ((isVmo2Context(haystack, subLabel) || /vmo2|virgin\s*media|o2/i.test(clientLabel)) &&
+          isDeviceOnlyTradeIn(haystack)));
+    const isSamsungTradeIn =
+      !isAsurionAll &&
+      isSamsungTradeInDeviceContext(haystack, subLabel) &&
+      isLikewizeBrand(haystack);
+    const isForcedLikewizeClient =
+      isBoostLikewizeDp ||
+      isSamsungLikewize ||
+      isBarclaysLikewize ||
+      isNatwestLikewize ||
+      isVmo2TradeIn ||
+      isSamsungTradeIn;
 
     let classification;
     try {
@@ -556,7 +599,7 @@ export async function runIngestion({
       };
     }
 
-    if (isPissedConsumer || isLikewizeBBB || isBoostLikewizeDp || isSamsungLikewize) {
+    if (isPissedConsumer || isLikewizeBBB || isForcedLikewizeClient) {
       classification = {
         ...classification,
         company: 'Likewize',
@@ -575,20 +618,19 @@ export async function runIngestion({
       };
     }
 
-    // Final relevance gate (PissedConsumer + BBB + Asurion + Boost Protect always kept)
+    // Final relevance gate (PissedConsumer + BBB + Asurion + named Likewize clients always kept)
     if (
       !isPissedConsumer &&
       !isBBB &&
       !isAsurionAll &&
-      !isBoostLikewizeDp &&
-      !isSamsungLikewize &&
+      !isForcedLikewizeClient &&
       (classification.is_relevant === false || classification.product_type === 'other')
     ) {
       console.log(`[Ingest] Skipping after classify (non-device): ${raw.id}`);
       continue;
     }
 
-    const finalCompany = isPissedConsumer || isLikewizeBBB || isBoostLikewizeDp || isSamsungLikewize
+    const finalCompany = isPissedConsumer || isLikewizeBBB || isForcedLikewizeClient
       ? 'Likewize'
       : isAsurionAll
         ? 'Asurion'

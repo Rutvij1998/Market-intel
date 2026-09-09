@@ -88,6 +88,18 @@ function normalizeMention(row: AlertMentionRow) {
 
 export type NormalizedAlertMention = ReturnType<typeof normalizeMention>;
 
+export type AlertDelivery = {
+  email: string;
+  sent: boolean;
+  filterLabel: string;
+  matchCount: number;
+  clients: string[];
+  subject?: string;
+  sampleTitles?: string[];
+  skipReason?: string;
+  error?: string;
+};
+
 function clientsEqual(a: string, b: string): boolean {
   const na = normalizeClientLabel(a).toLowerCase();
   const nb = normalizeClientLabel(b).toLowerCase();
@@ -235,8 +247,10 @@ export async function processAlertDigests(opts?: {
   emailsSent: number;
   errors: string[];
   emailConfigured: boolean;
+  deliveries: AlertDelivery[];
 }> {
   const errors: string[] = [];
+  const deliveries: AlertDelivery[] = [];
   if (!supabaseAdmin) {
     return {
       ok: false,
@@ -244,6 +258,7 @@ export async function processAlertDigests(opts?: {
       emailsSent: 0,
       errors: ['Supabase admin not configured'],
       emailConfigured: emailConfigured(),
+      deliveries: [],
     };
   }
   if (!emailConfigured()) {
@@ -255,6 +270,7 @@ export async function processAlertDigests(opts?: {
         'Email not configured (RESEND_API_KEY or SMTP_*). Subscriptions saved but nothing sent.',
       ],
       emailConfigured: false,
+      deliveries: [],
     };
   }
 
@@ -272,6 +288,7 @@ export async function processAlertDigests(opts?: {
       emailsSent: 0,
       errors: [subErr.message],
       emailConfigured: true,
+      deliveries: [],
     };
   }
 
@@ -285,6 +302,7 @@ export async function processAlertDigests(opts?: {
         ? [`No active subscription for ${opts.onlyEmail}`]
         : [],
       emailConfigured: true,
+      deliveries: [],
     };
   }
 
@@ -313,6 +331,7 @@ export async function processAlertDigests(opts?: {
       emailsSent: 0,
       errors: [mentErr.message],
       emailConfigured: true,
+      deliveries: [],
     };
   }
 
@@ -334,8 +353,17 @@ export async function processAlertDigests(opts?: {
 
     // Automatic path: no new matching thread → no email
     // Manual force: still send status + live screenshot
+    const filterLabel = describeSubscriptionFilters(sub);
     if (!matches.length && !opts?.force) {
       console.log(`[alerts] No new events for ${sub.email} since ${since}`);
+      deliveries.push({
+        email: sub.email,
+        sent: false,
+        filterLabel,
+        matchCount: 0,
+        clients: sub.all_clients ? ['All clients'] : sub.clients || [],
+        skipReason: 'No new matching threads',
+      });
       continue;
     }
 
@@ -347,8 +375,6 @@ export async function processAlertDigests(opts?: {
         focusFromViewSnapshot,
         focusFromSubscription,
       } = await import('@/lib/dashboardScreenshot');
-
-      const filterLabel = describeSubscriptionFilters(sub);
 
       // Clients that actually matched (already subscription-filtered)
       const clientCounts = new Map<string, number>();
@@ -508,6 +534,16 @@ export async function processAlertDigests(opts?: {
 
       if (!sent.ok) {
         errors.push(`${sub.email}: ${sent.error}`);
+        deliveries.push({
+          email: sub.email,
+          sent: false,
+          filterLabel,
+          matchCount: matches.length,
+          clients: clientsInvolved,
+          subject,
+          sampleTitles: matches.slice(0, 3).map((m) => m.title || m.text.slice(0, 80)),
+          error: sent.error,
+        });
         continue;
       }
 
@@ -517,11 +553,28 @@ export async function processAlertDigests(opts?: {
         .eq('id', sub.id);
 
       emailsSent += 1;
+      deliveries.push({
+        email: sub.email,
+        sent: true,
+        filterLabel,
+        matchCount: matches.length,
+        clients: clientsInvolved,
+        subject,
+        sampleTitles: matches.slice(0, 3).map((m) => m.title || m.text.slice(0, 80)),
+      });
       console.log(
         `[alerts] Event alert → ${sub.email} (${matches.length} match(es), filters: ${filterLabel}, insights=${insightsProvider})`,
       );
     } catch (e: any) {
       errors.push(`${sub.email}: ${e?.message || 'send failed'}`);
+      deliveries.push({
+        email: sub.email,
+        sent: false,
+        filterLabel,
+        matchCount: 0,
+        clients: sub.all_clients ? ['All clients'] : sub.clients || [],
+        error: e?.message || 'send failed',
+      });
     }
   }
 
@@ -531,6 +584,7 @@ export async function processAlertDigests(opts?: {
     emailsSent,
     errors,
     emailConfigured: true,
+    deliveries,
   };
 }
 

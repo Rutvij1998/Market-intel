@@ -1,5 +1,15 @@
 import Snoowrap from 'snoowrap';
-import { isElectronicDeviceProtection, isLikewizeRelevant, detectCompany, mentionsAsurion, hasBoostLikewizeClaimSignal } from './utils';
+import {
+  isElectronicDeviceProtection,
+  isLikewizeRelevant,
+  mentionsAsurion,
+  hasBoostLikewizeClaimSignal,
+  isBarclaysContext,
+  isNatwestContext,
+  isO2RecycleDeviceContext,
+  isSamsungTradeInDeviceContext,
+  isLikewizeBrand,
+} from './utils';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -125,14 +135,16 @@ const PARTNER_SUBS = [
   'target', 'walmart', 'verizon', 'tmobile', 'oneplus',
   'monitors', 'OLED', 'laptops', 'headphones', 'gadgets',
   'rogers', 'bell', 'telus', 'shaw', 'fido', 'koodo', 'freedommobile',
-  'att', 'cricketwireless', 'boostmobile', 'straighttalk', 'costco', 'samsclub'
+  'att', 'cricketwireless', 'boostmobile', 'straighttalk', 'costco', 'samsclub',
+  'ukpersonalfinance', 'LegalAdviceUK', 'AskUK', 'virginmedia', 'CasualUK',
 ];
 
 // These are the subs we actively search in every run. Put high-value client communities first.
 const SEARCH_SUBS = [
   'rogers', 'bell', 'telus', 'fido', 'koodo', 'freedommobile', 'shaw',
   'Newegg', 'bestbuy', 'samsung', 'target', 'verizon', 'att', 'tmobile',
-  'pcmasterrace', 'techsupport', 'personalfinance', 'buildapc', 'laptops'
+  'pcmasterrace', 'techsupport', 'personalfinance', 'buildapc', 'laptops',
+  'ukpersonalfinance', 'LegalAdviceUK', 'AskUK', 'virginmedia',
 ];
 
 const MAX_SUB_SEARCHES = 15;
@@ -161,6 +173,9 @@ function detectClientFromSubreddit(sub: string): string | undefined {
   if (lower.includes('cricket')) return 'Cricket Wireless';
   if (lower.includes('boost')) return 'Boost Mobile';
   if (lower.includes('straighttalk') || lower.includes('straight talk')) return 'Straight Talk';
+  if (lower.includes('barclays')) return 'Barclays';
+  if (lower.includes('natwest') || lower.includes('nat west')) return 'NatWest';
+  if (lower.includes('virginmedia') || lower.includes('vmo2') || lower === 'o2' || lower === 'o2uk') return 'VMO2';
   return undefined;
 }
 
@@ -418,6 +433,227 @@ async function collectSamsungGtpMentions(
   console.log(`[Reddit] [SAMSUNG-GTP] Tagged ${n} Samsung / GTP mentions so far`);
 }
 
+type TargetedCollectOpts = {
+  tag: string;
+  clientName: string;
+  timeFilter: RedditTimeFilter;
+  isRecentOnly: boolean;
+  keep: (text: string, subreddit: string) => boolean;
+  /** Keep Reddit search hits even if title/body fail the generic device gate. */
+  forceKeep?: boolean;
+  subSearches?: { sub: string; query: string }[];
+  globalQueries?: string[];
+};
+
+async function collectTargetedMentions(
+  client: any,
+  results: RawMention[],
+  opts: TargetedCollectOpts,
+) {
+  const { tag, clientName, timeFilter, isRecentOnly, keep, forceKeep } = opts;
+  const subLimit = isRecentOnly ? 30 : 60;
+  const globalLimit = isRecentOnly ? 40 : 80;
+  const maxFullSub = isRecentOnly ? 12 : 30;
+  const maxFullGlobal = isRecentOnly ? 15 : 40;
+
+  for (const { sub, query } of opts.subSearches || []) {
+    await waitForRateLimitIfNeeded(client, 900);
+    try {
+      console.log(`[Reddit] [${tag}] r/${sub}: ${query}`);
+      const listing = await client.getSubreddit(sub).search({
+        query,
+        sort: 'new',
+        time: timeFilter,
+        limit: subLimit,
+      });
+      const unique = Array.from(new Map([...listing].map((p: any) => [p.id, p])).values()).slice(
+        0,
+        subLimit,
+      );
+      let fullCount = 0;
+      for (const post of unique) {
+        const textForCheck = haystackFromPost(post);
+        const subName = post.subreddit?.display_name || sub;
+        if (!keep(textForCheck, subName)) continue;
+        const doFull = fullCount < maxFullSub;
+        await processSubmission(client, post, results, clientName, doFull, forceKeep);
+        if (doFull) {
+          fullCount++;
+          await waitForRateLimitIfNeeded(client, 400);
+        }
+      }
+    } catch (e: any) {
+      const msg = (e?.message || '').toLowerCase();
+      if (msg.includes('ratelimit')) {
+        console.warn(`[Reddit] [${tag}] Rate limit on r/${sub}`);
+        break;
+      }
+      console.log(`[Reddit] [${tag}] non-fatal r/${sub}: ${e?.message || e}`);
+    }
+  }
+
+  for (const q of opts.globalQueries || []) {
+    await waitForRateLimitIfNeeded(client, 1100);
+    try {
+      console.log(`[Reddit] [${tag}] global: ${q}`);
+      let listing = await client.search({
+        query: q,
+        sort: 'new',
+        time: timeFilter,
+        limit: globalLimit,
+      });
+      let combined: any[] = [...listing];
+      if (!isRecentOnly) {
+        try {
+          await waitForRateLimitIfNeeded(client, 500);
+          listing = await listing.fetchMore({ amount: 40 });
+          if (listing?.length) combined = combined.concat(listing);
+        } catch {}
+      }
+      const unique = Array.from(new Map(combined.map((p: any) => [p.id, p])).values()).slice(
+        0,
+        globalLimit,
+      );
+      let fullCount = 0;
+      for (const post of unique) {
+        const textForCheck = haystackFromPost(post);
+        const subName = post.subreddit?.display_name || '';
+        if (!keep(textForCheck, subName)) continue;
+        const doFull = fullCount < maxFullGlobal;
+        await processSubmission(client, post, results, clientName, doFull, forceKeep);
+        if (doFull) {
+          fullCount++;
+          await waitForRateLimitIfNeeded(client, 400);
+        }
+      }
+    } catch (e: any) {
+      if ((e?.message || '').toLowerCase().includes('ratelimit')) {
+        console.warn(`[Reddit] [${tag}] Rate limit on global`);
+      } else {
+        console.log(`[Reddit] [${tag}] non-fatal global: ${e?.message || e}`);
+      }
+    }
+  }
+
+  const tagged = results.filter((m) => (m.client || '').toLowerCase() === clientName.toLowerCase()).length;
+  console.log(`[Reddit] [${tag}] Tagged ${tagged} ${clientName} mentions so far`);
+}
+
+const UK_BANK_SUBS = ['ukpersonalfinance', 'LegalAdviceUK', 'AskUK', 'CasualUK'];
+
+async function collectBarclaysLikewizeMentions(
+  client: any,
+  results: RawMention[],
+  timeFilter: RedditTimeFilter,
+  isRecentOnly: boolean,
+) {
+  console.log('[Reddit] [BARCLAYS] Collecting Barclays + Likewize (all hits)…');
+  await collectTargetedMentions(client, results, {
+    tag: 'BARCLAYS',
+    clientName: 'Barclays',
+    timeFilter,
+    isRecentOnly,
+    forceKeep: true,
+    keep: (text, sub) => isBarclaysContext(text, sub) && isLikewizeBrand(text),
+    subSearches: UK_BANK_SUBS.concat('Barclays').map((sub) => ({
+      sub,
+      query: 'likewize barclays',
+    })),
+    globalQueries: [
+      'likewize barclays',
+      '"barclays" "likewize"',
+    ],
+  });
+}
+
+async function collectNatwestLikewizeMentions(
+  client: any,
+  results: RawMention[],
+  timeFilter: RedditTimeFilter,
+  isRecentOnly: boolean,
+) {
+  console.log('[Reddit] [NATWEST] Collecting NatWest + Likewize (all hits)…');
+  await collectTargetedMentions(client, results, {
+    tag: 'NATWEST',
+    clientName: 'NatWest',
+    timeFilter,
+    isRecentOnly,
+    forceKeep: true,
+    keep: (text, sub) => isNatwestContext(text, sub) && isLikewizeBrand(text),
+    subSearches: UK_BANK_SUBS.concat(['Natwest', 'UKFrugal']).map((sub) => ({
+      sub,
+      query: 'natwest (phone OR gadget OR insurance OR likewize OR claim)',
+    })),
+    globalQueries: [
+      '"natwest" "likewize"',
+      'natwest (gadget OR "phone insurance" OR "mobile phone insurance" OR likewize)',
+      'natwest ("phone insurance" OR "gadget insurance") (claim OR cover OR iphone OR samsung)',
+    ],
+  });
+}
+
+async function collectVmo2TradeInMentions(
+  client: any,
+  results: RawMention[],
+  timeFilter: RedditTimeFilter,
+  isRecentOnly: boolean,
+) {
+  console.log('[Reddit] [VMO2] Collecting VMO2 device trade-in + Likewize…');
+  await collectTargetedMentions(client, results, {
+    tag: 'VMO2',
+    clientName: 'VMO2',
+    timeFilter,
+    isRecentOnly,
+    forceKeep: true,
+    keep: (text, sub) => isO2RecycleDeviceContext(text, sub) && isLikewizeBrand(text),
+    subSearches: [
+      { sub: 'O2UK', query: '"o2 recycle" OR (trade-in OR "trade in") (phone OR iphone OR samsung)' },
+      { sub: 'virginmedia', query: '"o2 recycle" OR (trade-in OR recycle) (phone OR iphone OR samsung)' },
+      { sub: 'LegalAdviceUK', query: '"o2 recycle"' },
+      { sub: 'AskUK', query: '"o2 recycle"' },
+    ],
+    globalQueries: [
+      '"o2 recycle"',
+      '"O2 Recycle" (phone OR iphone OR ipad OR samsung OR device)',
+      'likewize (vmo2 OR "virgin media" OR "o2 recycle")',
+    ],
+  });
+}
+
+async function collectSamsungTradeInMentions(
+  client: any,
+  results: RawMention[],
+  timeFilter: RedditTimeFilter,
+  isRecentOnly: boolean,
+) {
+  console.log('[Reddit] [SAMSUNG-TRADEIN] Collecting Samsung device trade-in + Likewize…');
+  await collectTargetedMentions(client, results, {
+    tag: 'SAMSUNG-TRADEIN',
+    clientName: 'Samsung',
+    timeFilter,
+    isRecentOnly,
+    forceKeep: true,
+    keep: (text, sub) =>
+      isSamsungTradeInDeviceContext(text, sub) && isLikewizeBrand(text),
+    subSearches: [
+      'samsung',
+      'samsunggalaxy',
+      'GalaxyS23',
+      'GalaxyS24',
+      'GalaxyS25',
+      'GalaxyWatch',
+      'GalaxyFold',
+    ].map((sub) => ({
+      sub,
+      query: 'likewize ("trade-in" OR tradein OR "trade in" OR gtp)',
+    })),
+    globalQueries: [
+      'likewize (samsung OR galaxy) ("trade-in" OR tradein OR "trade in" OR gtp)',
+      'likewize samsung ("trade-in" OR "trade in")',
+    ],
+  });
+}
+
 export async function fetchDeviceProtectionMentions(
   limit = 250,
   opts?: { time?: RedditTimeFilter },
@@ -443,6 +679,10 @@ export async function fetchDeviceProtectionMentions(
     // ---------------------------------------------------------------
     await collectBoostMobileMentions(client, results, timeFilter, isRecentOnly);
     await collectSamsungGtpMentions(client, results, timeFilter, isRecentOnly);
+    await collectBarclaysLikewizeMentions(client, results, timeFilter, isRecentOnly);
+    await collectNatwestLikewizeMentions(client, results, timeFilter, isRecentOnly);
+    await collectVmo2TradeInMentions(client, results, timeFilter, isRecentOnly);
+    await collectSamsungTradeInMentions(client, results, timeFilter, isRecentOnly);
 
     // ---------------------------------------------------------------
     // 0. ASURION — unrestricted. Pull all Reddit posts mentioning Asurion
@@ -556,6 +796,10 @@ export async function fetchDeviceProtectionMentions(
       'likewize (phone OR device OR "protection plan" OR warranty OR insurance) -health -auto -car -home -pet -travel',
       'likewize ("boost mobile" OR boostmobile OR "boost infinite" OR "boost protect")',
       'likewize (samsung OR galaxy OR GTP OR "trade-in" OR tradein)',
+      'likewize barclays',
+      'likewize (natwest OR "nat west")',
+      'likewize (vmo2 OR "virgin media") ("trade-in" OR tradein OR recycle)',
+      'likewize (samsung OR galaxy) ("trade-in" OR tradein OR "trade in")',
       'squaretrade (phone OR device OR gadget OR electronics) ("protection plan" OR warranty OR insurance) -health -auto -car -home -pet -travel',
       'allstate (phone OR device OR "protection plan" OR "device protection") (warranty OR insurance OR claim OR replacement) -health -auto -car -home -pet -travel',
       '"protection plan" (phone OR smartphone OR gadget OR "electronics" OR tablet OR laptop) (squaretrade OR likewize OR allstate) -health -auto -car -home -pet',
@@ -725,6 +969,87 @@ export async function fetchSamsungGtpMentions(
   return kept;
 }
 
+export async function fetchBarclaysLikewizeMentions(
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit] [BARCLAYS] No client — cannot fetch');
+    return [];
+  }
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+  const results: RawMention[] = [];
+  await collectBarclaysLikewizeMentions(client, results, timeFilter, isRecentOnly);
+  const unique = Array.from(new Map(results.map((m) => [m.id, m])).values());
+  const kept = unique.filter((m) => isLikewizeBrand(`${m.text || ''} ${m.title || ''} ${m.full_thread || ''}`));
+  console.log(`[Reddit] [BARCLAYS] fetchBarclaysLikewizeMentions kept ${kept.length} / ${unique.length}`);
+  return kept;
+}
+
+export async function fetchNatwestLikewizeMentions(
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit] [NATWEST] No client — cannot fetch');
+    return [];
+  }
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+  const results: RawMention[] = [];
+  await collectNatwestLikewizeMentions(client, results, timeFilter, isRecentOnly);
+  const unique = Array.from(new Map(results.map((m) => [m.id, m])).values());
+  const kept = unique.filter((m) =>
+    isNatwestContext(`${m.text || ''} ${m.title || ''}`, m.subreddit) &&
+    isLikewizeBrand(`${m.text || ''} ${m.title || ''} ${m.full_thread || ''}`),
+  );
+  console.log(`[Reddit] [NATWEST] fetchNatwestLikewizeMentions kept ${kept.length} / ${unique.length}`);
+  return kept;
+}
+
+export async function fetchVmo2TradeInMentions(
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit] [VMO2] No client — cannot fetch');
+    return [];
+  }
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+  const results: RawMention[] = [];
+  await collectVmo2TradeInMentions(client, results, timeFilter, isRecentOnly);
+  const unique = Array.from(new Map(results.map((m) => [m.id, m])).values());
+  const kept = unique.filter((m) => {
+    const hay = `${m.text || ''} ${m.title || ''} ${m.full_thread || ''}`;
+    return isO2RecycleDeviceContext(hay, m.subreddit) && isLikewizeBrand(hay);
+  });
+  console.log(`[Reddit] [VMO2] fetchVmo2TradeInMentions kept ${kept.length} / ${unique.length}`);
+  return kept;
+}
+
+export async function fetchSamsungTradeInMentions(
+  opts?: { time?: RedditTimeFilter },
+): Promise<RawMention[]> {
+  const client = await getRedditClient();
+  if (!client) {
+    console.log('[Reddit] [SAMSUNG-TRADEIN] No client — cannot fetch');
+    return [];
+  }
+  const timeFilter: RedditTimeFilter = opts?.time || 'all';
+  const isRecentOnly = timeFilter === 'day' || timeFilter === 'hour';
+  const results: RawMention[] = [];
+  await collectSamsungTradeInMentions(client, results, timeFilter, isRecentOnly);
+  const unique = Array.from(new Map(results.map((m) => [m.id, m])).values());
+  const kept = unique.filter((m) => {
+    const hay = `${m.text || ''} ${m.title || ''} ${m.full_thread || ''}`;
+    return isSamsungTradeInDeviceContext(hay, m.subreddit) && isLikewizeBrand(hay);
+  });
+  console.log(`[Reddit] [SAMSUNG-TRADEIN] fetchSamsungTradeInMentions kept ${kept.length} / ${unique.length}`);
+  return kept;
+}
+
 // Note: limit is the final cap returned to ingestion. We now fetch wider in client subs to surface more Rogers-style mentions.
 
 
@@ -784,7 +1109,14 @@ async function collectCommentTree(commentsListing: any, maxComments = 100): Prom
 // We keep a post if it passes the strict electronic device protection filter (phones/gadgets/electronics plans).
 // This ensures competitor data (Asurion claims in r/verizon etc., Allstate device protection) is collected
 // symmetrically to Likewize data. The old Likewize-only gate has been removed.
-async function processSubmission(redditClient: any, post: any, results: RawMention[], clientFromSub?: string, doFullThread = true) {
+async function processSubmission(
+  redditClient: any,
+  post: any,
+  results: RawMention[],
+  clientFromSub?: string,
+  doFullThread = true,
+  forceKeep = false,
+) {
   try {
     const submission = await redditClient.getSubmission(post.id);
     await submission.fetch();
@@ -828,9 +1160,11 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
 
     const hayForFilter = `${candidate.text || ''} ${(candidate as any).title || ''} ${candidate.full_thread || ''}`;
     // Asurion: keep everything. Others: device protection or Likewize only.
-    if (shouldKeepRedditMention(hayForFilter)) {
+    if (forceKeep || shouldKeepRedditMention(hayForFilter)) {
       if (mentionsAsurion(hayForFilter)) {
         candidate.company = 'Asurion';
+      } else if (forceKeep || isLikewizeRelevant({ text: hayForFilter })) {
+        candidate.company = 'Likewize';
       }
       results.push(candidate as any);
     }
@@ -851,9 +1185,11 @@ async function processSubmission(redditClient: any, post: any, results: RawMenti
       comments: [],
     };
     const hayForFilter = `${candidate.text || ''} ${(candidate as any).title || ''}`;
-    if (shouldKeepRedditMention(hayForFilter)) {
+    if (forceKeep || shouldKeepRedditMention(hayForFilter)) {
       if (mentionsAsurion(hayForFilter)) {
         candidate.company = 'Asurion';
+      } else if (forceKeep || isLikewizeRelevant({ text: hayForFilter })) {
+        candidate.company = 'Likewize';
       }
       results.push(candidate as any);
     }
@@ -864,6 +1200,11 @@ function detectClientFromText(text: string): string | undefined {
   const lower = text.toLowerCase();
   if (/\bboost\s*mobile\b|boostmobile|\bboost\s*infinite\b|\bboost\s*protect\b/.test(lower)) {
     return 'Boost Mobile';
+  }
+  if (/\bbarclays\b/.test(lower)) return 'Barclays';
+  if (/\bnat\s*west\b|\bnatwest\b/.test(lower)) return 'NatWest';
+  if (/\bvmo2\b|\bvirgin\s*media\s*o2\b|\bvirgin\s*media\b|\bo2\s*(recycle|trade[\s-]?in|upgrade|mobile)\b/.test(lower)) {
+    return 'VMO2';
   }
   if (lower.includes('newegg')) return 'Newegg';
   if (lower.includes('best buy') || lower.includes('bestbuy')) return 'Best Buy';

@@ -3,7 +3,8 @@ import { cookies } from 'next/headers';
 import { processAlertDigests } from '@/lib/alertReport';
 import { finishJobRun, startJobRun } from '@/lib/jobRuns';
 import { verifyCronAuth } from '@/lib/cronAuth';
-import { notifyCronOutcome } from '@/lib/cronNotify';
+import { notifyAlertDeliveryReport, notifyCronOutcome } from '@/lib/cronNotify';
+import type { AlertDelivery } from '@/lib/alertReport';
 import { SESSION_COOKIE, verifySessionToken } from '@/lib/sessionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -128,21 +129,34 @@ async function handleRun(request: Request) {
       startedAt,
     });
 
-    // Ops notify for scheduled cron only (not every manual "Send email now")
+    // Scheduled cron: delivery report to ops (who received what). Failures only if nothing sent.
     if (isCron) {
-      await notifyCronOutcome({
-        jobName: 'notifications',
-        status: failed ? 'error' : 'success',
-        message,
-        error: failed ? errList.join('; ') || 'alerts failed' : undefined,
-        details: {
-          emailsSent: (result as { emailsSent?: number }).emailsSent,
-          subscribers: (result as { subscribers?: number }).subscribers,
+      const emailsSent = (result as { emailsSent?: number }).emailsSent || 0;
+      const deliveries = Array.isArray((result as { deliveries?: AlertDelivery[] }).deliveries)
+        ? ((result as { deliveries: AlertDelivery[] }).deliveries)
+        : [];
+      if (failed && emailsSent === 0) {
+        await notifyCronOutcome({
+          jobName: 'notifications',
+          status: 'error',
+          message,
+          error: errList.join('; ') || 'alerts failed',
+          details: {
+            emailsSent,
+            subscribers: (result as { subscribers?: number }).subscribers,
+            sinceHours,
+          },
+          durationMs: Date.now() - startedAt,
+          jobRunId: runId,
+        });
+      } else {
+        await notifyAlertDeliveryReport({
+          deliveries,
           sinceHours,
-        },
-        durationMs: Date.now() - startedAt,
-        jobRunId: runId,
-      });
+          durationMs: Date.now() - startedAt,
+          jobRunId: runId,
+        });
+      }
     }
 
     return NextResponse.json({ success: true, ...result, job_run_id: runId });

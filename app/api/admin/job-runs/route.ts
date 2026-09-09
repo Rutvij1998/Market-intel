@@ -22,6 +22,7 @@ export async function GET(request: Request) {
       'Jobs stuck in "running" past their limit are auto-closed as timed out when you refresh logs.',
       'Vercel kills functions at maxDuration; use job duration + stale cleanup to see failures.',
       'If Deployment Protection (SSO) blocks the cron host, jobs never start (302 → login).',
+      'Ops email: ingest/cron failures only. Alert runs send a delivery report (who received what).',
     ],
   };
 
