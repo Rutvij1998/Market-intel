@@ -1,24 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import { Toaster } from "sonner";
 
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-});
-
 export const metadata: Metadata = {
-  title: "Market Vantage",
+  title: "Market-Vantage | Likewize",
   description: "Market Vantage — sentiment and competitor intelligence for device protection.",
   icons: {
     icon: "/favicon.ico",
@@ -31,20 +18,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} antialiased`} suppressHydrationWarning>
-      <body className="min-h-screen bg-[var(--background)] dark:bg-[#12082A]">
-        <Script id="theme-script" strategy="beforeInteractive">
-          {`(function() {
-            try {
-              var theme = localStorage.getItem('theme');
-              var systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-              if (theme === 'dark' || (!theme && systemDark)) {
-                document.documentElement.classList.add('dark');
-              } else {
-                document.documentElement.classList.remove('dark');
-              }
-            } catch (e) {}
-          })();`}
+    <html lang="en" className="antialiased" suppressHydrationWarning>
+      <body className="min-h-screen bg-[var(--background)] text-[var(--foreground)] font-sans">
+        <Script id="mv-embed-detect" strategy="beforeInteractive">
+          {`(function(){try{if(window.self!==window.top)document.documentElement.classList.add('mv-embedded')}catch(e){document.documentElement.classList.add('mv-embedded')}})();`}
         </Script>
         {/* Microsoft Clarity */}
         <Script id="microsoft-clarity" strategy="afterInteractive">

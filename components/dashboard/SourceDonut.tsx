@@ -41,8 +41,9 @@ export function SourceDonut({ sources }: { sources: Source[] }) {
               contentStyle={{
                 backgroundColor: "var(--card)",
                 border: "1px solid var(--border)",
-                borderRadius: "6px",
-                fontSize: "12px",
+                borderRadius: "12px",
+                fontSize: "14px",
+                fontFamily: '"Likewize Sans", Arial, Calibri, sans-serif',
               }}
             />
           </PieChart>

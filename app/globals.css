@@ -1,38 +1,51 @@
 @import "tailwindcss";
+@import "./brand-fonts.css";
+@import "./likewize-tokens.css";
+@import "./product-hub-header.css";
+@import "./product-hub-type.css";
+
+@theme inline {
+  --font-sans: "Likewize Sans", Arial, Calibri, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
 
 /*
-  Market Vantage — unified theme from protect.likewize.com
-  Primary #3200BE · Accent #FF96FF · Cyan soft #C8FAFA
-  One card language, soft hierarchy, continuous surfaces.
+  Market Vantage — Product Hub visual language.
+  Font: Likewize Sans. Primary #3200BE. Page #FAF9FD.
 */
 :root {
+  color-scheme: light;
   --lw-primary: #3200be;
-  --lw-primary-hover: #280098;
-  --lw-primary-soft: #f3efff;
+  --lw-primary-hover: #4d1ed6;
+  --lw-primary-soft: #f5f2ff;
   --lw-primary-ring: rgba(50, 0, 190, 0.22);
   --lw-accent: #ff96ff;
-  --lw-accent-soft: #fff0ff;
+  --lw-accent-soft: #ffe5ff;
   --lw-cyan: #00a8b8;
   --lw-cyan-soft: #c8fafa;
+  --lw-ink: #14003b;
 
-  --background: #f6f3fc;
-  --foreground: #1a0b3d;
+  --font-brand: "Likewize Sans", Arial, Calibri, sans-serif;
+  --font-body: "Likewize Sans", Arial, Calibri, sans-serif;
+
+  --background: #faf9fd;
+  --foreground: #211c35;
   --card: #ffffff;
-  --card-foreground: #1a0b3d;
-  --muted: #f3efff;
-  --muted-foreground: #5c5470;
-  --border: #e6e0f2;
-  --border-strong: #d4cce8;
+  --card-foreground: #211c35;
+  --muted: #f2f0f8;
+  --muted-foreground: #635d7c;
+  --border: #e1ddea;
+  --border-strong: #cac6da;
   --primary: #3200be;
   --primary-foreground: #ffffff;
   --positive: #ff96ff;
   --neutral-data: #c8fafa;
   --negative-data: #3200be;
-  --danger: #e11d48;
+  --danger: #e03b5b;
 
-  --radius-card: 1rem;
-  --radius-sm: 0.75rem;
-  --shadow-card: 0 1px 2px rgba(50, 0, 190, 0.035), 0 6px 18px rgba(50, 0, 190, 0.055);
+  --radius-card: 16px;
+  --radius-sm: 12px;
+  --shadow-card: 0 1px 2px rgba(20, 41, 68, 0.04), 0 8px 24px rgba(20, 41, 68, 0.06);
   --shadow-card-hover: 0 4px 10px rgba(50, 0, 190, 0.07), 0 12px 28px rgba(50, 0, 190, 0.09);
   --transition-interactive: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease,
     box-shadow 0.25s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
@@ -44,7 +57,9 @@ html {
 }
 
 body {
-  font-family: var(--font-geist-sans);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.5;
   background: var(--background);
   color: var(--foreground);
   -webkit-font-smoothing: antialiased;
@@ -122,16 +137,17 @@ main,
 
 /* ——— Page chrome ——— */
 .mv-page-title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  color: var(--foreground);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: #142944;
   line-height: 1.2;
+  font-family: var(--font-brand);
 }
 
 @media (min-width: 1024px) {
   .mv-page-title {
-    font-size: 1.625rem;
+    font-size: 30px;
   }
 }
 
@@ -235,11 +251,12 @@ main,
 }
 
 .mv-section-title {
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--foreground);
-  font-size: 0.9375rem;
+  color: #142944;
+  font-size: 16px;
   line-height: 1.3;
+  font-family: var(--font-brand);
 }
 
 .mv-section-sub {
@@ -599,12 +616,12 @@ button.mv-legend-row {
 }
 
 .mv-select {
-  height: 2rem;
-  border-radius: 9999px;
+  height: 2.25rem;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--card);
   padding: 0 0.75rem;
-  font-size: 0.8125rem;
+  font-size: 15px;
   color: var(--foreground);
   box-shadow: 0 1px 2px rgba(50, 0, 190, 0.04);
   transition: var(--transition-interactive);
@@ -626,9 +643,10 @@ button.mv-legend-row {
 }
 
 .mv-segment-btn {
-  border-radius: 9999px;
-  padding: 0.2rem 0.7rem;
-  font-weight: 500;
+  border-radius: 6px;
+  padding: 0.35rem 0.85rem;
+  font-size: 15px;
+  font-weight: 400;
   color: var(--muted-foreground);
   transition: var(--transition-interactive);
 }

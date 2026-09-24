@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Star, RefreshCw, Download, LayoutDashboard, Users, Activity, Bell, Clock, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import { RefreshCw, Download, LayoutDashboard, Users, Bell, Clock, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 
 import { Button } from "@/components/ui/button";
@@ -86,6 +86,7 @@ import {
 import { ThreadFeedback } from "@/components/ThreadFeedback";
 import { DraftReply } from "@/components/DraftReply";
 import { UserMenu } from "@/components/UserMenu";
+import { ProductHubHeader, useEmbeddedInProductHub } from "@/components/ProductHubHeader";
 import { DashboardSearch, mentionMatchesSource } from "@/components/DashboardSearch";
 import { AlertEnrollment } from "@/components/AlertEnrollment";
 import { aggregateIssueThemes, type AggregatedTheme } from "@/lib/issueThemes";
@@ -242,9 +243,9 @@ function PieCalloutLabel(props: {
         textAnchor={textAnchor}
         dominantBaseline="central"
         fill={fill}
-        fontSize={11}
-        fontWeight={600}
-        style={{ fontFamily: "var(--font-geist-sans), system-ui, sans-serif" }}
+        fontSize={12}
+        fontWeight={700}
+        style={{ fontFamily: '"Likewize Sans", Arial, Calibri, sans-serif' }}
       >
         {label}
       </text>
@@ -292,6 +293,7 @@ export default function MarketIntelDashboard() {
 
   // Tab navigation: Overview + Competitor Analysis
   const [activeTab, setActiveTab] = useState<'overview' | 'competitor'>('overview');
+  const embedded = useEmbeddedInProductHub();
   // Used to mount Recharts ResponsiveContainers only on client + when tab active
   const [competitorMounted, setCompetitorMounted] = useState(false);
 
@@ -1305,79 +1307,48 @@ export default function MarketIntelDashboard() {
 
   return (
     <div
-      className="mv-app-shell flex flex-col lg:flex-row min-h-screen max-w-[100vw] overflow-x-hidden bg-[var(--background)] text-[var(--foreground)]"
+      className="mv-app-shell flex flex-col min-h-screen max-w-[100vw] overflow-x-hidden bg-[var(--background)] text-[var(--foreground)]"
       data-dashboard-ready={dataReady ? 'true' : 'false'}
     >
-      {/* 1. Left Sidebar - Purple theme (collapses on mobile) */}
-      <div
-        className="w-full lg:w-64 lg:max-w-[16rem] flex-shrink-0 text-white flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible"
-        style={{ backgroundColor: PURPLE }}
-      >
-        <div className="p-6 flex items-center gap-3 border-b border-white/20">
-          <div className="h-9 w-9 rounded-full bg-white flex items-center justify-center">
-            <Star className="h-5 w-5" style={{ color: PURPLE }} />
-          </div>
-          <div>
-            <div className="font-semibold text-lg tracking-tight">Market Vantage</div>
-          </div>
-        </div>
-
-        <div className="p-4 flex-1">
-          <nav className="space-y-1 text-sm">
-            {[
-              { label: "Overview", tab: 'overview' as const, icon: LayoutDashboard },
-              { label: "Competitor Analysis", tab: 'competitor' as const, icon: Users },
-            ].map((item) => {
-              const isActive = (item.tab === 'competitor' && activeTab === 'competitor') || (item.tab === 'overview' && activeTab === 'overview');
-              const Icon = item.icon;
-              return (
-                <a
-                  key={item.label}
-                  href="#"
-                  onClick={(e) => { e.preventDefault(); setActiveTab(item.tab); }}
-                  className={`flex items-center gap-2 px-3 py-2.5 rounded-lg transition cursor-pointer ${isActive ? "font-medium bg-white/15 shadow-sm" : "text-white/80 hover:text-white hover:bg-white/10"}`}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </a>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Bottom mini Sentiment Health + account */}
-        <div className="m-4 space-y-3">
-          <div className="p-3.5 rounded-xl bg-white/10 border border-white/15 backdrop-blur-sm">
-            <div className="text-[10px] uppercase tracking-widest text-white/70 mb-1 flex items-center gap-1">
-              <Activity className="h-3 w-3" /> Sentiment Health · {activeRange}
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-semibold">{healthScore}</span>
-              <span className="text-xs text-white/70">/100</span>
-            </div>
-            <div className="text-xs text-white/70 mt-0.5">vs prior period</div>
-          </div>
-          <div className="px-1 flex flex-col gap-2">
-            {canAdminConsole && (
-              <a
-                href="/admin"
-                className="inline-flex items-center justify-center gap-1.5 rounded-full border border-white/25 bg-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white/90 hover:bg-white/15"
-              >
-                Admin console
-              </a>
-            )}
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] uppercase tracking-wider text-white/50">Account</span>
-              <UserMenu />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content Area */}
+      <ProductHubHeader account={<UserMenu />} />
       <div className="flex-1 flex flex-col min-w-0 max-w-full overflow-x-hidden">
+        <section className="mv-hub-intro">
+          <div>
+            <p className="eyebrow">Market Vantage</p>
+            <h1>
+              Market intelligence
+              <br />
+              for Likewize.
+            </h1>
+          </div>
+          <p className="intro-copy">
+            Track brand mentions, sentiment by pillar, and competitor support behavior.
+            Filter by client, business line, and time range.
+          </p>
+        </section>
+        <nav className="mv-hub-tabs" aria-label="Market-Vantage views">
+          {([
+            { label: "Overview", tab: "overview" as const, icon: LayoutDashboard },
+            { label: "Competitor Analysis", tab: "competitor" as const, icon: Users },
+          ]).map((item) => {
+            const isActive = item.tab === activeTab;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.label}
+                type="button"
+                className={isActive ? "is-active" : undefined}
+                aria-current={isActive ? "page" : undefined}
+                onClick={() => setActiveTab(item.tab)}
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
         {/* Top header controls */}
-        <div className="mv-topbar px-4 lg:px-6 py-2.5 lg:py-3 flex items-center gap-2 lg:gap-3 flex-wrap sticky top-0 z-30 min-w-0">
+        <div className="mv-topbar px-5 lg:px-16 py-3 flex items-center gap-2 lg:gap-3 flex-wrap sticky top-0 z-30 min-w-0">
           <div className="mv-segment text-xs lg:text-sm order-2 lg:order-none">
             {timeRanges.map((range) => (
               <button
@@ -1624,12 +1595,21 @@ export default function MarketIntelDashboard() {
               <RefreshCw className="h-3.5 w-3.5" />
               Refresh
             </Button>
+            {canAdminConsole && (
+              <a
+                href="/admin"
+                className="inline-flex items-center gap-1.5 rounded-md border border-[var(--border)] bg-white px-2.5 py-1.5 text-xs lg:text-sm font-medium text-[#3200BE] hover:bg-[var(--lw-primary-soft)]"
+              >
+                Admin console
+              </a>
+            )}
+            {embedded && <UserMenu />}
           </div>
         </div>
 
         {/* Dashboard + insights side-by-side; insights max-height = dashboard column height */}
         <div className="flex flex-col lg:flex-row lg:items-start min-w-0 max-w-full flex-1 overflow-x-hidden">
-        <div ref={dashboardColRef} className="flex-1 min-w-0 max-w-full p-5 lg:p-7 space-y-5 lg:space-y-6 overflow-x-hidden">
+        <div ref={dashboardColRef} className="flex-1 min-w-0 max-w-full p-5 lg:px-16 lg:py-7 space-y-5 lg:space-y-6 overflow-x-hidden">
           <div className="flex items-center gap-3">
             <h1 className="mv-page-title">
               {activeTab === 'overview' ? 'Overview' : 'Competitor Analysis'}
@@ -1937,7 +1917,7 @@ export default function MarketIntelDashboard() {
                       onClick={() => setDrillPillar(drillPillar === p.name ? null : p.name as Pillar)}
                       className={`flex-1 text-center cursor-pointer transition-all duration-300 ease-out ${isDrilled ? 'ring-1 ring-[var(--primary)] rounded' : ''}`}
                     >
-                      <div style={{ fontSize: "12px", fontWeight: 600, color: "#1E1B4B", lineHeight: "1.1" }}>{p.name}</div>
+                      <div style={{ fontSize: "14px", fontWeight: 700, color: "#142944", lineHeight: "1.2", fontFamily: '"Likewize Sans", Arial, Calibri, sans-serif' }}>{p.name}</div>
                     </div>
                   );
                 })}

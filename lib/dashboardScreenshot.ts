@@ -1,8 +1,9 @@
 /**
  * Capture screenshots / full-page PDFs of the live Market Vantage dashboard.
  *
- * Local: Playwright
- * Vercel: puppeteer-core + @sparticuz/chromium
+ * Local screenshots: Playwright (Node)
+ * Vercel screenshots: puppeteer-core + @sparticuz/chromium
+ * PDFs: Playwright for Python (scripts/pdf_convert.py)
  *
  * Modes:
  * - Auto alerts: range=All, skip line filters, fall back if empty
@@ -11,6 +12,7 @@
  */
 
 import { createSessionToken, SESSION_COOKIE } from '@/lib/sessionAuth';
+import { renderPdfViaPlaywright } from '@/lib/pythonPdf';
 
 /** Synthetic @likewize.com subject for headless screenshot sessions. */
 function serviceSessionEmail(): string {
@@ -558,51 +560,16 @@ export async function captureDashboardScreenshots(
 
 /**
  * Embed full-page screenshot(s) into a multi-page PDF (whole page, sliced vertically).
+ * Playwright for Python prints the PDF. Page sizes match the old PDFKit slicer:
+ * letter width, no upscale, tall captures split every 792pt.
  */
 export async function screenshotsToPdf(shots: DashboardShot[]): Promise<Buffer> {
-  const PDFDocument = (await import('pdfkit')).default;
-
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ autoFirstPage: false, margin: 0 });
-    const chunks: Buffer[] = [];
-    doc.on('data', (c) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-
-    if (!shots.length) {
-      doc.addPage({ size: 'LETTER', margin: 48 });
-      doc.fontSize(14).text('No screenshots captured.');
-      doc.end();
-      return;
-    }
-
-    for (const shot of shots) {
-      // Fit to letter width; slice tall full-page captures across multiple PDF pages
-      const maxPageW = 612; // letter width points
-      const maxPageH = 792; // letter height
-      const scale = Math.min(1, maxPageW / shot.width);
-      const scaledW = shot.width * scale;
-      const scaledH = shot.height * scale;
-
-      if (scaledH <= maxPageH) {
-        doc.addPage({ size: [scaledW, Math.max(scaledH, 200)], margin: 0 });
-        doc.image(shot.buffer, 0, 0, { width: scaledW, height: scaledH });
-      } else {
-        const pageCount = Math.ceil(scaledH / maxPageH);
-        for (let i = 0; i < pageCount; i++) {
-          const sliceH = Math.min(maxPageH, scaledH - i * maxPageH);
-          doc.addPage({ size: [scaledW, sliceH], margin: 0 });
-          doc.save();
-          doc.rect(0, 0, scaledW, sliceH).clip();
-          doc.image(shot.buffer, 0, -i * maxPageH, {
-            width: scaledW,
-            height: scaledH,
-          });
-          doc.restore();
-        }
-      }
-    }
-
-    doc.end();
+  return renderPdfViaPlaywright({
+    kind: 'screenshots',
+    shots: shots.map((shot) => ({
+      width: shot.width,
+      height: shot.height,
+      pngBase64: shot.buffer.toString('base64'),
+    })),
   });
 }

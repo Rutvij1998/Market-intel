@@ -2,8 +2,8 @@
  * Match new mentions to alert subscriptions and build PDF + email digests.
  */
 
-import PDFDocument from 'pdfkit';
 import { supabaseAdmin } from '@/lib/supabase';
+import { renderPdfViaPlaywright } from '@/lib/pythonPdf';
 import { sendEmail, emailConfigured } from '@/lib/email';
 import {
   detectBusinessLine,
@@ -139,76 +139,32 @@ export async function buildAlertPdf(opts: {
   since: string;
 }): Promise<Buffer> {
   const { matches, sub, since } = opts;
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 48, size: 'LETTER' });
-    const chunks: Buffer[] = [];
-    doc.on('data', (c) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-
-    const purple = '#3200BE';
-    doc.fillColor(purple).fontSize(18).font('Helvetica-Bold').text('Market Vantage', { continued: false });
-    doc.moveDown(0.3);
-    doc.fillColor('#1a0b3d').fontSize(14).text('New thread alert report', { continued: false });
-    doc.moveDown(0.5);
-    doc.fontSize(9).fillColor('#5c5470').font('Helvetica');
-    doc.text(`Generated: ${new Date().toUTCString()}`);
-    doc.text(`Period: since ${new Date(since).toUTCString()}`);
-    doc.text(`Matches: ${matches.length}`);
-    doc.moveDown(0.4);
-
-    const filterParts: string[] = [];
-    if (sub.all_clients) filterParts.push('All clients');
-    else if (sub.clients?.length) filterParts.push(`Clients: ${sub.clients.join(', ')}`);
-    if (sub.all_business_lines) filterParts.push('All business lines');
-    else if (sub.business_lines?.length) {
-      filterParts.push(
-        `Lines: ${sub.business_lines.map((l) => formatBusinessLine(l as BusinessLine) || l).join(', ')}`,
-      );
-    }
-    doc.font('Helvetica-Bold').fillColor('#3200BE').text('Your filters (only these are included)');
-    doc.font('Helvetica').fillColor('#1a0b3d').text(filterParts.join(' · ') || '—');
-    doc.moveDown(0.8);
-
-    if (!matches.length) {
-      doc.text('No new matching threads for these filters in this period.');
-      doc.end();
-      return;
-    }
-
-    matches.forEach((m, i) => {
-      if (doc.y > 700) doc.addPage();
-      doc
-        .font('Helvetica-Bold')
-        .fillColor('#3200BE')
-        .fontSize(11)
-        .text(`${i + 1}. ${m.title || m.text.slice(0, 80) || 'Thread'}`, {
-          width: 500,
-        });
-      doc.font('Helvetica').fontSize(9).fillColor('#5c5470');
-      doc.text(
-        `${m.source} · ${m.client} · ${m.businessLineLabel} · ${m.sentiment} · ${m.pillar}`,
-      );
-      doc.text(new Date(m.created_at).toLocaleString());
-      doc.moveDown(0.25);
-      doc.fillColor('#1a0b3d').fontSize(9).text((m.text || '').slice(0, 450), {
-        width: 500,
-        align: 'left',
-      });
-      if (m.url) {
-        doc.fillColor('#3200BE').text(m.url, { link: m.url, underline: true, width: 500 });
-      }
-      doc.moveDown(0.7);
-    });
-
-    doc.fontSize(8).fillColor('#5c5470').text(
-      'You are receiving this because you enrolled in Market Vantage alerts. Use the unsubscribe link in the email to stop.',
-      48,
-      doc.page.height - 60,
-      { width: 500 },
+  const filterParts: string[] = [];
+  if (sub.all_clients) filterParts.push('All clients');
+  else if (sub.clients?.length) filterParts.push(`Clients: ${sub.clients.join(', ')}`);
+  if (sub.all_business_lines) filterParts.push('All business lines');
+  else if (sub.business_lines?.length) {
+    filterParts.push(
+      `Lines: ${sub.business_lines.map((l) => formatBusinessLine(l as BusinessLine) || l).join(', ')}`,
     );
+  }
 
-    doc.end();
+  return renderPdfViaPlaywright({
+    kind: 'alert',
+    generated: new Date().toUTCString(),
+    since: new Date(since).toUTCString(),
+    matchCount: matches.length,
+    filters: filterParts.join(' · '),
+    emptyMessage: 'No new matching threads for these filters in this period.',
+    footer:
+      'You are receiving this because you enrolled in Market Vantage alerts. Use the unsubscribe link in the email to stop.',
+    matches: matches.map((m, i) => ({
+      heading: `${i + 1}. ${m.title || m.text.slice(0, 80) || 'Thread'}`,
+      meta: `${m.source} · ${m.client} · ${m.businessLineLabel} · ${m.sentiment} · ${m.pillar}`,
+      when: new Date(m.created_at).toLocaleString(),
+      body: (m.text || '').slice(0, 450),
+      url: m.url || '',
+    })),
   });
 }
 

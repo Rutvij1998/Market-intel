@@ -11,13 +11,13 @@ import {
   Save,
   Search,
   Shield,
-  Star,
   Trash2,
   X,
   LayoutDashboard,
   Pencil,
 } from 'lucide-react';
 import { UserMenu } from '@/components/UserMenu';
+import { ProductHubHeader } from '@/components/ProductHubHeader';
 
 type ColMeta = {
   name: string;
@@ -355,37 +355,24 @@ export default function AdminPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--background)] text-[var(--foreground)]">
-      {/* Top bar — admin only, no dashboard widgets */}
-      <header className="border-b border-[var(--border)] bg-white/95 backdrop-blur sticky top-0 z-40">
-        <div className="px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div
-              className="h-8 w-8 rounded-full flex items-center justify-center shrink-0"
-              style={{ backgroundColor: '#3200BE' }}
-            >
-              <Star className="h-3.5 w-3.5 text-white" />
-            </div>
-            <div className="min-w-0">
-              <div className="font-semibold tracking-tight text-sm leading-tight">Admin console</div>
-              <div className="text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider truncate">
-                Supabase data · Market Vantage
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border)] bg-white px-3 py-1.5 text-xs font-medium hover:bg-[var(--muted)]"
-            >
-              <LayoutDashboard className="h-3.5 w-3.5" />
-              Dashboard
-            </Link>
-            <div className="rounded-full overflow-hidden [&_button]:!border-[var(--border)] [&_button]:!bg-[var(--muted)] [&_button]:!text-[var(--foreground)] [&_span]:!border-[var(--border)] [&_span]:!bg-[var(--muted)] [&_span]:!text-[var(--foreground)]">
-              <UserMenu />
-            </div>
-          </div>
+      <ProductHubHeader account={<UserMenu />} />
+      <div className="px-5 sm:px-16 py-6 border-b border-[var(--border)] bg-white">
+        <p className="eyebrow text-[#3200BE] text-[11px] font-bold uppercase tracking-[0.13em] mb-2">
+          Market-Vantage
+        </p>
+        <div className="flex items-end justify-between gap-4 flex-wrap">
+          <h1 className="text-[30px] font-bold tracking-[-0.025em] text-[#142944] m-0">
+            Admin console
+          </h1>
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-1.5 text-[15px] font-bold text-[#3200BE]"
+          >
+            <LayoutDashboard className="h-4 w-4" />
+            Dashboard
+          </Link>
         </div>
-      </header>
+      </div>
 
       <div className="flex-1 flex min-h-0">
         {/* Table nav */}

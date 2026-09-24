@@ -1,9 +1,9 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Star, Lock, Loader2, Mail, KeyRound, ArrowLeft } from "lucide-react";
+import { Lock, Loader2, Mail, KeyRound, ArrowLeft } from "lucide-react";
+import { ProductHubHeader } from "@/components/ProductHubHeader";
 import { DOMAIN_ERROR, isLikewizeEmail } from "@/lib/likewizeEmail";
 
 type Step = "email" | "otp";
@@ -106,32 +106,14 @@ export default function SignInPage() {
 
   return (
     <div className="min-h-screen flex flex-col bg-[var(--background)] text-[var(--foreground)]">
-      <header className="px-5 py-4 flex items-center justify-between border-b border-[var(--border)] bg-white/90 backdrop-blur">
-        <Link href="/" className="flex items-center gap-2.5">
-          <div
-            className="h-9 w-9 rounded-full flex items-center justify-center"
-            style={{ backgroundColor: "#3200BE" }}
-          >
-            <Star className="h-4 w-4 text-white" />
-          </div>
-          <div>
-            <div className="font-semibold tracking-tight leading-tight">Market Vantage</div>
-            <div className="text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider">
-              Likewize
-            </div>
-          </div>
-        </Link>
-        <Link
-          href="/"
-          className="text-sm font-medium text-[var(--muted-foreground)] hover:text-[var(--primary)]"
-        >
-          ← Home
-        </Link>
-      </header>
+      <ProductHubHeader />
 
       <main className="flex-1 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
+            <p className="eyebrow text-[#3200BE] text-[11px] font-bold uppercase tracking-[0.13em] mb-4">
+              Market-Vantage
+            </p>
             <div
               className="mx-auto h-12 w-12 rounded-2xl flex items-center justify-center mb-4"
               style={{ backgroundColor: "var(--lw-primary-soft)" }}
@@ -142,7 +124,7 @@ export default function SignInPage() {
                 <KeyRound className="h-5 w-5" style={{ color: "#3200BE" }} />
               )}
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight">
+            <h1 className="text-[30px] font-bold tracking-[-0.025em] text-[#142944]">
               {step === "email" ? "Sign in" : "Enter your code"}
             </h1>
             <p className="mt-2 text-sm text-[var(--muted-foreground)]">

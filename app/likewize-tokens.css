@@ -1,0 +1,598 @@
+/* Likewize Design System tokens. Font-face block intentionally omitted; see src/brand-fonts.css */
+/* ===== likewize-design/tokens/colors.css ===== */
+/* ============================================================
+   LIKEWIZE — COLOR TOKENS
+   Source: Likewize Brand Style Guide v1.1 (April 2022)
+   "We are predominantly a Pink brand."
+   Primary: Pink (Pantone 252, #FF96FF) + Blue (Pantone Blue 072, #3200BE)
+   Supportive: Blush, Frost, White — used sparingly.
+   ============================================================ */
+:root {
+  color-scheme: light;
+
+  /* ---- Brand base (exact, from style guide) ---- */
+  --lw-pink: #FF96FF;        /* Pantone 252 — hero accent */
+  --lw-blue: #3200BE;        /* Pantone Blue 072 — deep violet primary */
+  --lw-blush: #F5D2FA;       /* Pantone 7436 — soft pink wash */
+  --lw-frost: #C8FAFA;       /* Pantone 290 — cool mint wash */
+  --lw-white: #FFFFFF;
+
+  /* ---- Pink scale (derived for states / depth) ---- */
+  --lw-pink-100: #FFE5FF;
+  --lw-pink-200: #FFC2FF;
+  --lw-pink-300: #FF96FF;    /* = brand pink */
+  --lw-pink-400: #F56DF5;
+  --lw-pink-500: #E45CE4;    /* usable deeper magenta (press / on-light text) */
+  --lw-pink-600: #C23FC2;
+
+  /* ---- Blue / violet scale (derived for states / depth) ---- */
+  --lw-blue-300: #6A3FE8;
+  --lw-blue-400: #4D1ED6;
+  --lw-blue-500: #3200BE;    /* = brand blue */
+  --lw-blue-600: #2700A0;
+  --lw-blue-700: #1C0079;
+  --lw-ink:      #14003B;    /* deepest violet-black — primary text */
+
+  /* ---- Neutral scale (violet-tinted to harmonize with brand) ---- */
+  --lw-grey-900: #211C35;
+  --lw-grey-800: #322C49;
+  --lw-grey-700: #4A4463;
+  --lw-grey-600: #635D7C;
+  --lw-grey-500: #837D9B;
+  --lw-grey-400: #A8A2BE;
+  --lw-grey-300: #CAC6DA;
+  --lw-grey-200: #E4E1EC;
+  --lw-grey-100: #F2F0F8;
+  --lw-grey-50:  #FAF9FD;
+
+  /* ---- Functional status (NOT in brand guide — additions, harmonized) ---- */
+  --lw-success: #1F9E72;
+  --lw-success-bg: #E3F6EE;
+  --lw-success-text: #0F6B4A;
+  --lw-warning: #E8920B;
+  --lw-warning-bg: #FCF1DD;
+  --lw-warning-text: #9A5E00;
+  --lw-error: #E03B5B;
+  --lw-error-bg: #FCE6EB;
+  --lw-error-text: #B01E3B;
+  --lw-info: var(--lw-blue-500);
+
+  /* ---- Capability fit / maturity (ordered by lightness) ---- */
+  --fit-full: var(--lw-blue-500);
+  --fit-partial: var(--lw-blue-300);
+  --fit-planned: var(--lw-frost);
+  --fit-none: var(--lw-grey-100);
+
+  /* ============================================================
+     SEMANTIC ALIASES
+     ============================================================ */
+  /* Text */
+  --text-strong: var(--lw-ink);
+  --text-body: var(--lw-grey-900);
+  --text-muted: var(--lw-grey-600);   /* grey-600 = 6.1:1 on white — AA at caption sizes (grey-500 was 3.9:1) */
+  --text-subtle: var(--lw-grey-600);
+  --text-on-blue: var(--lw-white);
+  --text-on-pink: var(--lw-ink);
+  --text-accent: var(--lw-blue-500);
+  /* Reserved for >=19px bold or non-text use only — pink-600 fails AA below
+     that size, so phase A moved every 12-14px eyebrow/label onto
+     --text-accent. No light-mode consumers remain; kept with its dark
+     mapping for the sizes it's still safe at. */
+  --text-label-accent: var(--lw-pink-600);
+  --text-link: var(--lw-blue-500);
+
+  /* Surfaces */
+  --surface-page: var(--lw-grey-50);
+  --surface-raised: var(--lw-white);
+  --surface-card: var(--lw-white);
+  --surface-subtle: var(--lw-grey-100);
+  --surface-muted: var(--lw-grey-200);
+  /* One step ABOVE a card, for hover/selected states painted onto one.
+     --surface-subtle cannot do this job as well as being a tinted band ground:
+     a band must sit below the cards resting on it, a hover must sit above the
+     card it paints. Light happens to tolerate both at grey-100 because cards
+     are white; dark does not, which is where the two jobs came apart. */
+  --surface-hover: var(--lw-grey-100);
+  --surface-blush: var(--lw-blush);
+  --surface-frost: var(--lw-frost);
+  --surface-pink: var(--lw-pink);
+  --surface-ink: var(--lw-blue-500);   /* dark/hero sections */
+  --surface-ink-deep: var(--lw-ink);
+
+  /* Borders */
+  --border-subtle: var(--lw-grey-200);
+  --border-default: var(--lw-grey-300);
+  /* Hover boundary. Carries the whole lift affordance in dark, where every
+     --shadow-* is none and the resting/hover border delta was ~2%. */
+  --border-hover: var(--lw-grey-300);
+  --border-strong: var(--lw-grey-400);
+  --border-accent: var(--lw-blue-500);
+
+  /* Interactive — primary (blue is the workhorse fill; pink is light) */
+  --action-primary: var(--lw-blue-500);
+  --action-primary-hover: var(--lw-blue-400);
+  --action-primary-press: var(--lw-blue-700);
+  --action-primary-text: var(--lw-white);
+
+  /* Interactive — accent (pink) */
+  --action-accent: var(--lw-pink-300);
+  --action-accent-hover: var(--lw-pink-200);
+  --action-accent-press: var(--lw-pink-500);
+  --action-accent-text: var(--lw-ink);
+
+  /* Focus — blue clears WCAG 1.4.11 (11.18:1 on white); pink-400 was 2.50:1. */
+  --focus-ring: var(--lw-blue-500);
+
+  /* State indicator — on the soft-light page (#FAF9FD) pink-500 falls to 2.88:1;
+     pink-600 (#C23FC2) clears 3:1 on page, white card and tinted panel alike. */
+  --indicator-active: var(--lw-pink-600);
+
+  /* Data visualisation — semantic roles, not series order alone */
+  --chart-series-primary: var(--lw-blue-500);
+  --chart-series-secondary: var(--lw-blue-300);
+  --chart-series-highlight: var(--lw-pink-300);
+  --chart-series-neutral: var(--lw-grey-300);
+  --chart-axis: var(--lw-grey-600);
+  --chart-gridline: var(--lw-grey-200);
+  --chart-positive: var(--lw-success-text);
+  --chart-negative: var(--lw-error-text);
+}
+
+/* ===== likewize-design/tokens/typography.css ===== */
+/* ============================================================
+   LIKEWIZE — TYPOGRAPHY TOKENS
+   Brand font: Likewize Sans (Regular 400 / Bold 700).
+   Office/system fallback per guide: Arial.
+   ============================================================ */
+:root {
+  /* ---- Families ---- */
+  --font-brand: "Likewize Sans", "Arial", "Calibri", sans-serif;
+  --font-body: "Likewize Sans", "Arial", "Calibri", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
+
+  /* ---- Weights (only two real weights exist) ---- */
+  --fw-regular: 400; /* @kind other */
+  --fw-bold: 700; /* @kind other */
+
+  /* ---- Type scale (display → caption). Major-third-ish ramp ---- */
+  --fs-display-2xl: 76px;
+  --fs-display-xl: 60px;
+  --fs-display-lg: 48px;
+  --fs-h1: 38px;
+  --fs-h2: 30px;
+  --fs-display-md: 40px;
+  --fs-h3: 24px;
+  --fs-h4: 20px;
+  --fs-body-lg: 18px;
+  --fs-body: 16px;
+  --fs-body-sm: 15px;
+  --fs-caption: 14px;
+  --fs-overline: 12px;
+
+  /* ---- Line heights ---- */
+  --lh-tight: 1.04;     /* @kind other */
+  --lh-snug: 1.15;      /* @kind other */
+  --lh-heading: 1.2;    /* @kind other */
+  --lh-body: 1.5;       /* @kind other */
+  --lh-relaxed: 1.65;   /* @kind other */
+
+  /* ---- Letter spacing (geometric sans — slight negative on display) ---- */
+  --ls-display: -0.03em;  /* @kind other */
+  --ls-heading: -0.01em;  /* @kind other */
+  --ls-body: 0em;         /* @kind other */
+  --ls-label: 0.06em;      /* @kind other */
+  --ls-overline: 0.14em;  /* @kind other */
+}
+
+/* ===== likewize-design/tokens/spacing.css ===== */
+/* ============================================================
+   LIKEWIZE — SPACING, RADII, LAYOUT TOKENS
+   4px base grid.
+   ============================================================ */
+:root {
+  /* ---- Spacing scale (4px base) ---- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+
+  /* ---- Radii — clean, slightly rounded; pill for chips/buttons ---- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-2xl: 32px;
+  --radius-pill: 999px;
+
+  /* ---- Container widths ---- */
+  /* ---- Stacking order ----
+     Five tiers, written down because the invariant they encode was not:
+     the sticky section nav sits below the global header, and the two only
+     avoid conflict because the header does not itself stick. If it ever
+     does, these are the numbers to reason about. */
+  --z-local: 1;    /* raising an element within its own component */
+  --z-raised: 2;   /* the stat strip lifting over the hero */
+  --z-sticky: 10;  /* the sticky section nav */
+  --z-header: 20;  /* the global header */
+  --z-skip: 100;   /* the skip link, above everything */
+
+  --container-sm: 640px;
+  --container-md: 880px;
+  --container-lg: 1120px;
+  --container-xl: 1320px;
+
+  /* ---- Page layout scaffold — approved values, kept fixed so line
+     lengths match the reviewed screenshots. ---- */
+  --content-max: 1280px;
+  --reading-max: 800px;
+  /* The tighter prose measure, for copy that sits under a heading block or
+     inside a band rather than running as a page intro. */
+  --reading-narrow: 760px;
+  /* Hero inner column. The spec names 900 as the base with the Catalog at 820;
+     Partner, Release, API and Technology each picked their own without
+     recording why. Every hero reads this token, and the four that differ set
+     it locally — so the disagreement is now visible in one place and costs one
+     line to settle, rather than being spread across five stylesheets. */
+  --hero-measure: 900px;
+  --gutter: var(--space-12);
+  --section-space: var(--space-20);
+  --pink-rule: var(--lw-pink-400);
+}
+
+/* ===== likewize-design/tokens/effects.css ===== */
+/* ============================================================
+   LIKEWIZE — EFFECTS: shadows, gradients, motion
+   Shadows are violet-tinted (never neutral grey) to stay on-brand.
+   ============================================================ */
+:root {
+  /* ---- Elevation (soft, violet-tinted) ---- */
+  --shadow-xs: 0 1px 2px rgba(20, 0, 59, 0.06);
+  --shadow-sm: 0 2px 6px rgba(20, 0, 59, 0.08);
+  --shadow-md: 0 8px 24px rgba(20, 0, 59, 0.10);
+  --shadow-lg: 0 18px 48px rgba(20, 0, 59, 0.14);
+  --shadow-xl: 0 32px 80px rgba(20, 0, 59, 0.18);
+  /* Pink glow — for accent / hero moments */
+  --shadow-pink: 0 12px 40px rgba(255, 150, 255, 0.45);
+  --shadow-blue: 0 12px 40px rgba(50, 0, 190, 0.30);
+  --halo-current: 0 0 0 6px rgba(255, 150, 255, 0.28);
+  --chart-inset: 12px;
+
+  /* ---- Signature gradients (brand pink↔blue, used sparingly) ---- */
+  --gradient-brand: linear-gradient(120deg, #3200BE 0%, #7A2FE0 45%, #FF96FF 100%); /* @kind other */
+  --gradient-blue: linear-gradient(150deg, #3200BE 0%, #5A2FE0 100%); /* @kind other */
+  --gradient-pink: linear-gradient(150deg, #FF96FF 0%, #F5D2FA 100%); /* @kind other */
+  --gradient-frost: linear-gradient(150deg, #C8FAFA 0%, #F5D2FA 100%); /* @kind other */
+  /* Protection scrim for text over imagery */
+  --scrim-ink: linear-gradient(180deg, rgba(20,0,59,0) 0%, rgba(20,0,59,0.72) 100%); /* @kind other */
+
+  /* ---- Motion ---- */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* @kind other */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* @kind other */
+  --dur-fast: 120ms; /* @kind other */
+  --dur-base: 200ms; /* @kind other */
+  --dur-slow: 360ms; /* @kind other */
+
+  /* ---- Focus ring ---- */
+  --ring-width: 3px; /* @kind spacing */
+  --ring-offset: 2px; /* @kind spacing */
+}
+
+/* ===== likewize-design/tokens/base.css ===== */
+/* ============================================================
+   LIKEWIZE — BASE / RESET
+   Light, opinionated defaults wired to brand tokens.
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-body);
+  color: var(--text-body);
+  background: var(--surface-page);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-synthesis: none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-family: var(--font-brand);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-heading);
+  letter-spacing: var(--ls-heading);
+  color: var(--text-strong);
+  text-wrap: balance;
+}
+
+p { margin: 0; text-wrap: pretty; }
+
+a { color: var(--text-link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+strong, b { font-weight: var(--fw-bold); }
+
+/* Overline / eyebrow helper */
+.lw-overline {
+  font-size: var(--fs-overline);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-overline);
+  text-transform: uppercase;
+  color: var(--text-accent);
+}
+
+::selection { background: var(--lw-pink-300); color: var(--lw-ink); }
+
+:focus-visible {
+  outline: var(--ring-width) solid var(--focus-ring);
+  outline-offset: var(--ring-offset);
+}
+
+/* Respect the OS reduced-motion preference — decorative transitions and
+   entrance animations collapse to their end state. (<deck-stage> handles
+   its own chrome inside its shadow root.) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===== likewize-design/tokens/states.css ===== */
+/* ============================================================
+   LIKEWIZE — COMPONENT INTERACTION STATES
+   Hover / active states that inline styles can't express.
+   Class hooks are emitted by the React components.
+   ============================================================ */
+
+/* ---- Button ---- */
+/* Base resting styles -- previously unused anywhere in the app (only the
+   hover/press deltas below existed), so the Program Builder wizard is the
+   first real consumer. Resting colors are chosen to match what each
+   variant's own hover/press target already implies: primary rests one step
+   lighter than its hover (--action-primary-hover), secondary/ghost rest
+   transparent-ish since their hover targets are neutral greys, accent rests
+   on the pink surface one step lighter than its own hover. */
+.lw-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  font-family: var(--font-body);
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-body-sm);
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-standard);
+}
+
+.lw-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.lw-button[data-variant="primary"] {
+  background: var(--action-primary);
+  color: var(--action-primary-text);
+}
+
+.lw-button[data-variant="accent"] {
+  background: var(--action-accent);
+  color: var(--action-accent-text);
+}
+
+.lw-button[data-variant="secondary"] {
+  background: var(--surface-raised);
+  color: var(--text-strong);
+  border-color: var(--border-default);
+}
+
+.lw-button[data-variant="ghost"] {
+  background: transparent;
+  color: var(--text-strong);
+}
+
+.lw-button[data-variant="primary"]:not(:disabled):hover { background: var(--action-primary-hover); }
+.lw-button[data-variant="primary"]:not(:disabled):active { background: var(--action-primary-press); transform: translateY(1px); }
+
+.lw-button[data-variant="accent"]:not(:disabled):hover { background: var(--lw-pink-200); }
+.lw-button[data-variant="accent"]:not(:disabled):active { background: var(--action-accent-press); transform: translateY(1px); }
+
+.lw-button[data-variant="secondary"]:not(:disabled):hover { background: var(--lw-grey-50); }
+.lw-button[data-variant="secondary"]:not(:disabled):active { background: var(--lw-grey-100); transform: translateY(1px); }
+
+.lw-button[data-variant="ghost"]:not(:disabled):hover { background: var(--lw-grey-100); }
+.lw-button[data-variant="ghost"]:not(:disabled):active { background: var(--lw-grey-200); }
+
+/* ---- Inputs ---- */
+.lw-input:focus,
+.lw-select:focus,
+.lw-textarea:focus,
+.auth-field input:focus {
+  outline: none;
+  border-color: var(--lw-blue-400);
+  /* --focus-ring, not a pink wash. This was rgba(255,150,255,0.40) — about
+     1.15:1 on white, well under WCAG 1.4.11's 3:1 for a non-text indicator.
+     It is the same mistake the token sheet already records against pink for
+     focus, a few lines up: "blue clears 11.18:1 on white; pink-400 was
+     2.50:1". A substitute indicator has to be as visible as the outline it
+     replaces. */
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.lw-input::placeholder, .lw-textarea::placeholder { color: var(--text-subtle); }
+
+/* ---- Tabs ---- */
+.lw-tab:hover { color: var(--text-strong); }
+
+/* ---- Tag remove ---- */
+.lw-tag-remove:hover { background: rgba(20,0,59,0.12); }
+
+/* ---- Card interactive ---- */
+.lw-card--interactive { transition: box-shadow var(--dur-base) var(--ease-standard), transform var(--dur-base) var(--ease-standard); cursor: pointer; }
+.lw-card--interactive:hover { box-shadow: var(--shadow-lg); transform: translateY(-2px); }
+
+/* The lift needs the same guard the page sheets give theirs. It has to sit
+   AFTER the rule above, not in the global reduced-motion block higher up the
+   file, which would lose to it on source order at equal specificity. Nothing
+   references this class today, but it is system surface like .lw-button — a
+   component that is wrong when used is worse than one that is absent. */
+@media (prefers-reduced-motion: reduce) {
+  .lw-card--interactive:hover {
+    transform: none;
+  }
+}
+
+
+/* ============================================================
+   LIKEWIZE — DARK THEME (authoritative token source)
+   Driven by the OS setting. `[data-theme="light"]` stays an escape hatch that
+   keeps the approved light appearance; there is no manual toggle.
+   Page ground is a desaturated --lw-ink, never pure black. No filters, no
+   inversion — every value below is a deliberate dark rendition of the brand.
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    /* Neutral ladder flips: low steps become the dark grounds. */
+    --lw-grey-50: #221e2e;
+    --lw-grey-100: #2a2536;
+    --lw-grey-200: #363048;
+    --lw-grey-300: #443d58;
+    --lw-grey-400: #6f6788;
+
+    /* Text */
+    --text-strong: #f4f2fa;
+    --text-body: #e7e3f2;
+    --text-muted: #b6afc9;
+    --text-subtle: #b6afc9;
+    --text-accent: #b7a6ff;
+    --text-label-accent: var(--lw-pink-300);
+    --text-link: #b7a6ff;
+    --text-on-blue: #ffffff;
+    --text-on-pink: var(--lw-ink);
+
+    /* Surfaces — the ladder is monotonic: every step is lighter than the one
+       it rests on. This matters more in dark than light, because every
+       --shadow-* is none here and surface value is the only elevation signal
+       left. It used to invert: a card (#1d1929) painted on a tinted band
+       (#221e2e) read as a recess, while an identical card one band up read as
+       raised. --surface-subtle moved down under the cards, --surface-card
+       moved up, and hover states moved off --surface-subtle entirely and onto
+       --surface-hover above. */
+    --surface-page: #17141f;
+    --surface-subtle: #1d1929;
+    --surface-card: #242030;
+    /* Light maps raised and card both to white; dark keeps them paired. */
+    --surface-raised: #242030;
+    --surface-muted: #2a2536;
+    --surface-hover: #302b40;
+    --surface-blush: #33203a;
+    --surface-frost: #17323a;
+    --surface-ink: #2a0096;
+    --surface-ink-deep: #12002f;
+
+    /* Borders — #322C42 disappears against --surface-frost, so lift them. */
+    --border-subtle: #4a4360;
+    --border-default: #52496b;
+    --border-hover: #6b6088;
+    --border-strong: #5a5273;
+    --border-accent: #b7a6ff;
+
+    /* Actions — the blue fill inverts to a light violet with ink text. */
+    --action-primary: #b7a6ff;
+    --action-primary-hover: #c9bcff;
+    --action-primary-press: #9c87f5;
+    --action-primary-text: var(--lw-ink);
+    --action-accent: var(--lw-pink-300);
+    --action-accent-hover: var(--lw-pink-200);
+    --action-accent-press: var(--lw-pink-400);
+    --action-accent-text: var(--lw-ink);
+
+    /* Focus / state indicator — pink reads on both dark and branded grounds. */
+    --focus-ring: #ffb3ff;
+    --pink-rule: var(--lw-pink-300);
+    --indicator-active: var(--lw-pink-300);
+
+    /* Status — dark grounds with light foregrounds (all ≥ 4.5:1). */
+    --lw-success: #47b68e;
+    --lw-success-bg: #17372c;
+    --lw-success-text: #a8ebd1;
+    --lw-warning: #d9a13a;
+    --lw-warning-bg: #3a2c12;
+    --lw-warning-text: #f2cf8f;
+    --lw-error: #e76480;
+    --lw-error-bg: #3b1d2a;
+    --lw-error-text: #ffb9c8;
+    --lw-info: #b7a6ff;
+
+    /* Capability fit / maturity */
+    --fit-full: #b7a6ff;
+    --fit-partial: #7f6ae0;
+    --fit-planned: #2f6b74;
+    --fit-none: #2a2536;
+
+    /* Data visualisation */
+    --chart-series-primary: #b7a6ff;
+    --chart-series-secondary: #8f7cf0;
+    --chart-series-highlight: var(--lw-pink-300);
+    --chart-series-neutral: #52496b;
+    --chart-axis: #b6afc9;
+    --chart-gridline: #363048;
+    --chart-positive: #a8ebd1;
+    --chart-negative: #ffb9c8;
+
+    /* Shadows are invisible on a #17141F ground — the lighter-for-elevation
+       surface ladder carries depth instead. */
+    --shadow-xs: none;
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
+    --shadow-xl: none;
+  }
+
+  /* Base elements that read raw brand steps in light. */
+  :root:not([data-theme="light"]) ::selection {
+    background: var(--lw-pink-300);
+    color: var(--lw-ink);
+  }
+
+  :root:not([data-theme="light"]) .lw-input:focus,
+  :root:not([data-theme="light"]) .lw-select:focus,
+  :root:not([data-theme="light"]) .lw-textarea:focus,
+  :root:not([data-theme="light"]) .auth-field input:focus {
+    border-color: #b7a6ff;
+  }
+
+  :root:not([data-theme="light"]) .lw-button[data-variant="secondary"]:not(:disabled):hover,
+  :root:not([data-theme="light"]) .lw-button[data-variant="ghost"]:not(:disabled):hover {
+    background: var(--surface-muted);
+  }
+
+  /* Native form controls follow the dark scheme rather than the OS light default. */
+  :root:not([data-theme="light"]) input,
+  :root:not([data-theme="light"]) select,
+  :root:not([data-theme="light"]) textarea {
+    color-scheme: dark;
+  }
+}

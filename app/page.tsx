@@ -8,9 +8,9 @@ import {
   MessageSquareReply,
   Shield,
   Sparkles,
-  Star,
   Users,
 } from 'lucide-react';
+import { ProductHubHeader } from '@/components/ProductHubHeader';
 
 export const metadata = {
   title: 'Market Vantage · Likewize',
@@ -54,58 +54,29 @@ const features = [
 export default function HomePage() {
   return (
     <div className="min-h-screen flex flex-col bg-[var(--background)] text-[var(--foreground)]">
-      {/* Nav */}
-      <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-white/90 backdrop-blur-md">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-2.5 min-w-0">
-            <div
-              className="h-8 w-8 rounded-full flex items-center justify-center shrink-0"
-              style={{ backgroundColor: '#3200BE' }}
-            >
-              <Star className="h-3.5 w-3.5 text-white" />
-            </div>
-            <span className="font-semibold tracking-tight truncate">Market Vantage</span>
-          </Link>
-          <nav className="flex items-center gap-2 sm:gap-3">
-            <Link
-              href="/sign-in"
-              className="text-sm font-medium text-[var(--muted-foreground)] hover:text-[var(--primary)] px-2 py-1.5"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/sign-in"
-              className="inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold text-white shadow-sm"
-              style={{ backgroundColor: '#3200BE' }}
-            >
-              Open dashboard
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </nav>
-        </div>
-      </header>
+      <ProductHubHeader />
 
       {/* Hero */}
       <section className="relative overflow-hidden">
-        <div
-          className="absolute inset-0 opacity-[0.07] pointer-events-none"
-          style={{
-            background:
-              'radial-gradient(ellipse 80% 60% at 50% -10%, #3200BE 0%, transparent 55%), radial-gradient(ellipse 50% 40% at 100% 50%, #FF96FF 0%, transparent 50%)',
-          }}
-        />
-        <div className="relative max-w-6xl mx-auto px-4 sm:px-6 pt-16 sm:pt-24 pb-16 sm:pb-20">
-          <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--primary)] mb-6">
-            <Lock className="h-3 w-3" />
-            Likewize internal
+        <div className="mv-hub-intro !grid-cols-1 sm:!grid-cols-[1.6fr_1fr] max-w-[1536px]">
+          <div>
+            <p className="eyebrow">Market Vantage</p>
+            <h1>
+              Market intelligence
+              <br />
+              for Likewize.
+            </h1>
           </div>
-          <h1 className="text-4xl sm:text-5xl lg:text-[3.25rem] font-semibold tracking-tight leading-[1.1] max-w-3xl text-[var(--foreground)]">
-            Market intelligence for Device Protection — built for Likewize.
-          </h1>
-          <p className="mt-5 text-base sm:text-lg text-[var(--muted-foreground)] max-w-2xl leading-relaxed">
+          <p className="intro-copy">
             One place to track brand mentions, sentiment by pillar, business-line mix, and
             competitor support behavior. Sign in with your @likewize.com email to open the live app.
           </p>
+        </div>
+        <div className="relative max-w-[1536px] mx-auto px-5 sm:px-16 pb-16 sm:pb-20">
+          <div className="inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.13em] text-[#3200BE] mb-6">
+            <Lock className="h-3 w-3" />
+            Likewize internal
+          </div>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Link
               href="/sign-in"
@@ -131,11 +102,11 @@ export default function HomePage() {
 
       {/* Features */}
       <section id="features" className="border-t border-[var(--border)] bg-white">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-16 sm:py-20">
-          <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+        <div className="max-w-[1536px] mx-auto px-5 sm:px-16 py-16 sm:py-20">
+          <h2 className="text-[30px] font-bold tracking-[-0.025em] text-[#142944]">
             Built for Product, CX, and Competitive Ops
           </h2>
-          <p className="mt-2 text-[var(--muted-foreground)] max-w-xl text-sm sm:text-base">
+          <p className="mt-2 text-[#607086] max-w-xl text-base leading-[1.6]">
             From source mix to drill-down threads — evidence you can act on, filtered by client and
             business line.
           </p>
@@ -150,10 +121,10 @@ export default function HomePage() {
                   >
                     <Icon className="h-5 w-5" style={{ color: '#3200BE' }} />
                   </div>
-                  <h3 className="font-semibold tracking-tight text-[var(--foreground)]">
+                  <h3 className="font-bold tracking-tight text-[#142944] text-[20px]">
                     {f.title}
                   </h3>
-                  <p className="mt-2 text-sm text-[var(--muted-foreground)] leading-relaxed">
+                  <p className="mt-2 text-base text-[#607086] leading-[1.6]">
                     {f.body}
                   </p>
                 </div>
